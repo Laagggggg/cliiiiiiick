@@ -29,6 +29,7 @@ def test_ui_actions_basic(tmp_path, monkeypatch):
 
     monitor = run_action("live_monitor")
     assert monitor["mode"] == "live_monitor"
+    assert "shadow_decision" in monitor
 
     assert run_action("dry_run")["mode"] == "dry_run"
 

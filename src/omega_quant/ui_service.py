@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 
 from omega_quant.data.providers import get_provider_chain
+from omega_quant.engine import run_step
 from omega_quant.live_gates import live_gates
 from omega_quant.ops.master_validation import master_validation
 from omega_quant.ops.proof_check import verify_paper_result
@@ -31,8 +32,10 @@ def _live_monitor() -> dict:
     errors: list[str] = []
     for provider in get_provider_chain():
         try:
-            bars = provider.get_bars("SPY", "1d", limit=5)
+            bars = provider.get_bars("SPY", "1d", limit=40)
             latest = bars[-1]
+            closes = [b.close for b in bars]
+            shadow = run_step(closes=closes, equity=5000.0)
             return {
                 "status": "ok",
                 "mode": "live_monitor",
@@ -42,7 +45,14 @@ def _live_monitor() -> dict:
                     "close": latest.close,
                     "volume": latest.volume,
                 },
-                "readiness": "GREEN" if len(bars) >= 5 else "YELLOW",
+                "readiness": "GREEN" if len(bars) >= 20 else "YELLOW",
+                "shadow_decision": {
+                    "status": shadow["status"],
+                    "reason": shadow.get("reason", ""),
+                    "score": shadow.get("score", 0.0),
+                    "threshold": shadow.get("threshold", 0.0),
+                    "regime": shadow.get("regime", "UNKNOWN"),
+                },
             }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")

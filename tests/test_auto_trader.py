@@ -38,3 +38,15 @@ def test_tamper_detected(tmp_path, monkeypatch):
 
     verify = verify_paper_result()
     assert verify["ok"] is False
+
+
+def test_paper_cycle_exit_prices_come_from_real_bars(tmp_path, monkeypatch):
+    from omega_quant.data.providers.csv_provider import CsvMarketDataProvider
+
+    monkeypatch.chdir(tmp_path)
+    reset_account(2000.0)
+    out = run_paper_cycle(starting_capital=2000, cycles=2)
+    close_set = {b.close for b in CsvMarketDataProvider().get_bars("SPY", "1d", limit=500)}
+    for t in out["result"]["session_trades"]:
+        assert t["entry"] in close_set
+        assert t["exit"] in close_set

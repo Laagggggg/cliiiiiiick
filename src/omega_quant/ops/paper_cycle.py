@@ -4,8 +4,9 @@ import hashlib
 import json
 from pathlib import Path
 
-from omega_quant.data.providers import CsvMarketDataProvider, get_provider_chain
+from omega_quant.data.providers import get_provider_chain
 from omega_quant.data.reconciler import reconcile_prices
+from omega_quant.engine import run_step
 from omega_quant.ops.logger import log_event
 from omega_quant.ops.trade_review import render_trade_reviews_markdown
 from omega_quant.paper_account.db import apply_fill, export_jsonl, get_account_summary, get_or_create_account, list_trades
@@ -37,24 +38,6 @@ def _choose_bars(symbol: str = "SPY", timeframe: str = "1d", limit: int = 300) -
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")
     raise RuntimeError("no market data provider available: " + " | ".join(errors))
-
-
-def _strategy_decision(closes: list[float]) -> dict:
-    sma5 = sum(closes[-5:]) / 5.0
-    sma20 = sum(closes[-20:]) / 20.0
-    trend_signal = (closes[-1] - closes[-5]) / closes[-5]
-    score = max(0.0, trend_signal * 40.0)
-    threshold = 0.01
-    regime = "TREND" if sma5 > sma20 else "MEAN_REVERT"
-    should_trade = score > threshold and closes[-1] > sma20
-    return {
-        "score": score,
-        "threshold": threshold,
-        "regime": regime,
-        "trend_signal": trend_signal,
-        "should_trade": should_trade,
-        "reason": "trend_above_threshold" if should_trade else "score_or_bias_below_threshold",
-    }
 
 
 def _write_proof_markdown(path: str, result: dict) -> None:
@@ -96,40 +79,42 @@ def run_paper_cycle(starting_capital: float = 5000.0, cycles: int = 1) -> dict:
 
     rows, source = _choose_bars()
     closes_primary = [float(r["close"]) for r in rows]
-    secondary_rows = CsvMarketDataProvider().get_bars(symbol="SPY", timeframe="1d", limit=len(rows))
-    closes_secondary = [float(r.close) for r in secondary_rows][-len(closes_primary):]
-    rec = reconcile_prices(closes_primary[-len(closes_secondary):], closes_secondary, tolerance_pct=8.0)
+
+    rec = {"passed": True, "degraded": True, "reason": "secondary_unavailable"}
+    for provider in get_provider_chain():
+        if provider.source_name() == source:
+            continue
+        try:
+            secondary_rows = provider.get_bars(symbol="SPY", timeframe="1d", limit=len(rows))
+            closes_secondary = [float(r.close) for r in secondary_rows][-len(closes_primary):]
+            if len(closes_secondary) < 30:
+                continue
+            rec = reconcile_prices(closes_primary[-len(closes_secondary):], closes_secondary, tolerance_pct=0.25)
+            rec["degraded"] = False
+            break
+        except Exception:  # noqa: BLE001
+            continue
+
     if not rec["passed"]:
         return {"status": "HALT", "reason": "reconciliation_failed", "details": rec}
 
     for offset in range(max(1, cycles)):
         closes = closes_primary[: len(closes_primary) - max(0, cycles - 1 - offset)]
-        if len(closes) < 25:
-            continue
-        decision = _strategy_decision(closes)
-        if not decision["should_trade"]:
+        decision = run_step(closes=closes, equity=float(get_account_summary(db_path=DB_PATH)["equity"]))
+        if decision["status"] != "TRADE_FILLED":
             continue
 
-        acct = get_account_summary(db_path=DB_PATH)
-        equity = float(acct["equity"])
-        entry = closes[-1]
-        projected_exit = entry * (1.0 + decision["trend_signal"] * 0.35)
-        if projected_exit <= 0:
-            continue
-        qty = round((equity * 0.15) / entry, 6)
-        if qty <= 0:
-            continue
-        pnl = (projected_exit - entry) * qty
         apply_fill(
-            ts=rows[-1]["timestamp"],
+            ts=rows[len(closes) - 1]["timestamp"],
             symbol="SPY",
             side="LONG",
-            qty=qty,
-            entry=entry,
-            exit=projected_exit,
-            pnl_net=pnl,
+            qty=decision["qty"],
+            entry=decision["entry"],
+            exit=decision["exit"],
+            pnl_net=decision["pnl"],
             reason={
-                "status": "TRADE_FILLED",
+                "status": decision["status"],
+                "reason": decision["reason"],
                 "score": decision["score"],
                 "threshold": decision["threshold"],
                 "regime": decision["regime"],
@@ -152,6 +137,7 @@ def run_paper_cycle(starting_capital: float = 5000.0, cycles: int = 1) -> dict:
         "ledger_trade_count": len(all_trades),
         "session_trades": session_trades,
         "account_summary": get_account_summary(db_path=DB_PATH),
+        "reconciliation": rec,
     }
 
     ledger_path = ARTIFACTS / "paper_ledger.json"
