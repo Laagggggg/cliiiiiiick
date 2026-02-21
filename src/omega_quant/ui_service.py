@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+import subprocess
+
+from omega_quant.data.providers import get_provider_chain
 from omega_quant.live_gates import live_gates
 from omega_quant.ops.master_validation import master_validation
+from omega_quant.ops.proof_check import verify_paper_result
+from omega_quant.paper_account.db import get_account_summary, reset_account
 from omega_quant.research.checklist import render_go_no_go_markdown
 from omega_quant.research.report import render_report
-from omega_quant.ops.proof_check import verify_paper_result
-from pathlib import Path
 
+
+RISK_ACK_TEXT = "I UNDERSTAND THIS SYSTEM CAN AND WILL LOSE MONEY"
 
 
 def default_metrics() -> dict:
@@ -19,6 +25,28 @@ def default_metrics() -> dict:
         "recovery_factor": 3.4,
         "expectancy": 0.12,
     }
+
+
+def _live_monitor() -> dict:
+    errors: list[str] = []
+    for provider in get_provider_chain():
+        try:
+            bars = provider.get_bars("SPY", "1d", limit=5)
+            latest = bars[-1]
+            return {
+                "status": "ok",
+                "mode": "live_monitor",
+                "source": provider.source_name(),
+                "latest_bar": {
+                    "timestamp": latest.timestamp,
+                    "close": latest.close,
+                    "volume": latest.volume,
+                },
+                "readiness": "GREEN" if len(bars) >= 5 else "YELLOW",
+            }
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{provider.source_name()}:{exc}")
+    return {"status": "HALT", "mode": "live_monitor", "errors": errors, "readiness": "RED"}
 
 
 def run_action(action: str, params: dict | None = None) -> dict:
@@ -40,7 +68,35 @@ def run_action(action: str, params: dict | None = None) -> dict:
         starting_capital = float(params.get("starting_capital", 5000.0))
         cycles = int(params.get("cycles", 1))
         out = run_paper_cycle(starting_capital=starting_capital, cycles=cycles)
-        return {"status": "ok", "mode": "paper", "cycle": out}
+        return {"status": "ok", "mode": "paper", "cycle": out, "account": get_account_summary()}
+
+    if action == "paper_account":
+        return {"status": "ok", "account": get_account_summary()}
+
+    if action == "reset_paper":
+        starting_capital = float(params.get("starting_capital", 5000.0))
+        return {"status": "ok", "account": reset_account(starting_capital)}
+
+    if action == "proof_check":
+        proof = verify_paper_result()
+        return {"status": "ok" if proof.get("ok") else "HALT", "proof": proof}
+
+    if action == "paper_review":
+        p = Path("artifacts/paper_trade_reviews.md")
+        return {
+            "status": "ok",
+            "exists": p.exists(),
+            "path": str(p),
+            "content": p.read_text(encoding="utf-8") if p.exists() else "No paper reviews yet. Run Paper Trading Mode first.",
+        }
+
+    if action == "download_audit_pack":
+        script = Path(__file__).resolve().parents[2] / "scripts" / "make_audit_pack.py"
+        proc = subprocess.run(f"python {script}", shell=True, capture_output=True, text=True)
+        return {"status": "ok" if proc.returncode == 0 else "error", "output": proc.stdout.strip(), "stderr": proc.stderr.strip()}
+
+    if action == "live_monitor":
+        return _live_monitor()
 
     if action == "dry_run":
         return {
@@ -48,15 +104,6 @@ def run_action(action: str, params: dict | None = None) -> dict:
             "mode": "dry_run",
             "message": "Dry run ready. Use main_dry_run.py for execution simulation.",
         }
-
-
-    if action == "paper_review":
-        p = Path("artifacts/paper_trade_reviews.md")
-        return {"status": "ok", "exists": p.exists(), "path": str(p), "content": p.read_text(encoding="utf-8") if p.exists() else "No paper reviews yet. Run Paper Trading Mode first."}
-
-
-    if action == "proof_check":
-        return verify_paper_result()
 
     if action == "live_check":
         confirm_live = bool(params.get("confirm_live", False))
