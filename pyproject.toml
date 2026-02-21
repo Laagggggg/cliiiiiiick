@@ -1,0 +1,16 @@
+[project]
+name = "omega-quant"
+version = "0.1.0"
+description = "Fail-closed adaptive trading bot skeleton"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

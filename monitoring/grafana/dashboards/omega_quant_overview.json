@@ -1,0 +1,8 @@
+{
+  "title": "OMEGA-QUANT Overview",
+  "panels": [
+    {"title": "Equity Curve", "type": "timeseries"},
+    {"title": "Portfolio Heat", "type": "timeseries"},
+    {"title": "Guard Failures", "type": "timeseries"}
+  ]
+}
