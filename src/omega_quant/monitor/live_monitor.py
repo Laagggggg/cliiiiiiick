@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from omega_quant.data.providers import get_provider_chain
 from omega_quant.engine import run_step
-from omega_quant.monitor.live_ws import run_live_websocket
+from omega_quant.monitor.live_ws import ensure_websocket, get_ws_state
 
 
 def _freshness(ts: str) -> int:
@@ -17,9 +17,10 @@ def _freshness(ts: str) -> int:
 
 def run_live_monitor(mode: str = "polling") -> dict:
     ws_probe = None
+    ws_state = None
     if mode == "websocket":
-        ws_probe = run_live_websocket("SPY")
-        mode = "polling"
+        ws_probe = ensure_websocket("SPY")
+        ws_state = get_ws_state()
 
     errors: list[str] = []
     for provider in get_provider_chain():
@@ -29,20 +30,30 @@ def run_live_monitor(mode: str = "polling") -> dict:
             q = provider.get_quote("SPY")
             shadow = run_step(rows, rows[-20:] if len(rows) >= 20 else rows, equity=5000.0, has_position=False)
             fresh = _freshness(rows[-1]["timestamp"])
-            ready = "GREEN" if shadow.get("status") == "ENTER" and fresh < 1800 else ("YELLOW" if fresh < 7200 else "RED")
+            live_price = q.ask if q else rows[-1]["close"]
             transport = "POLLING"
-            if ws_probe and not ws_probe.get("ok"):
-                transport = ws_probe.get("transport", "WEBSOCKET FAILED -> POLLING")
+
+            if ws_state:
+                if ws_state.get("connected") and ws_state.get("last_price") is not None:
+                    transport = "WEBSOCKET"
+                    live_price = ws_state["last_price"]
+                    if ws_state.get("last_ts"):
+                        fresh = _freshness(ws_state["last_ts"])
+                else:
+                    transport = ws_state.get("transport", "WEBSOCKET FAILED -> POLLING")
+
+            ready = "GREEN" if shadow.get("status") == "ENTER" and fresh < 1800 else ("YELLOW" if fresh < 7200 else "RED")
+
             return {
                 "status": "ok",
                 "mode": "live_monitor",
                 "transport": transport,
                 "source": provider.source_name(),
                 "latest_bar": rows[-1],
-                "live_price": q.ask if q else rows[-1]["close"],
+                "live_price": live_price,
                 "spread": (q.ask - q.bid) if q else None,
                 "freshness_seconds": fresh,
-                "delayed_label": "REALTIME" if provider.source_name() == "alpaca" else "DELAYED/POLL",
+                "delayed_label": "REALTIME" if transport == "WEBSOCKET" or provider.source_name() == "alpaca" else "DELAYED/POLL",
                 "shadow_decision": {
                     "status": shadow.get("status"),
                     "reason": shadow.get("reason"),
@@ -53,15 +64,17 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 "readiness": ready,
                 "monitor_safe": True,
                 "ws_probe": ws_probe,
+                "ws_state": ws_state,
             }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")
     return {
         "status": "HALT",
         "mode": "live_monitor",
-        "transport": ws_probe.get("transport", "POLLING") if ws_probe else "POLLING",
+        "transport": ws_state.get("transport", "POLLING") if ws_state else "POLLING",
         "errors": errors,
         "readiness": "RED",
         "monitor_safe": True,
         "ws_probe": ws_probe,
+        "ws_state": ws_state,
     }

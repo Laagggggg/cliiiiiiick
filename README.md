@@ -168,3 +168,17 @@ $env:PYTHONPATH = "src"
 python main_broker_paper.py --steps 2
 python -c "from omega_quant.ui_service import run_action; print(run_action('websocket_monitor'))"
 ```
+
+## Finalizer Notes: Websocket + Broker Daemon
+
+- `websocket_monitor` now attempts a real websocket session and keeps stream state; if it fails it falls back with label **WEBSOCKET FAILED -> POLLING**.
+- `main_broker_paper.py --daemon` runs a broker reconciliation loop with deterministic `client_order_id` values for idempotent order behavior.
+- Monitor paths are read-only and never place orders.
+
+### Broker daemon commands (Windows PowerShell)
+
+```powershell
+$env:PYTHONPATH = "src"
+python main_broker_paper.py --daemon --seconds 30 --interval 5
+python main_broker_paper.py --steps 2
+```

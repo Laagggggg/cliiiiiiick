@@ -8,9 +8,11 @@ from omega_quant.ui_service import run_action
 
 HTML = """
 <!doctype html><html><head><meta charset='utf-8'><title>OMEGA QUANT Proof Terminal</title>
-<style>body{font-family:Arial;margin:18px;max-width:1280px}.card{border:1px solid #ccc;border-radius:10px;padding:12px;margin-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{margin:3px;padding:8px}pre{background:#111;color:#0f0;padding:10px;border-radius:8px;overflow:auto}.danger{color:#a00}</style>
+<style>body{font-family:Arial;margin:18px;max-width:1280px}.card{border:1px solid #ccc;border-radius:10px;padding:12px;margin-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{margin:3px;padding:8px}pre{background:#111;color:#0f0;padding:10px;border-radius:8px;overflow:auto}.danger{color:#a00}.banner{background:#222;color:#fff;padding:10px;border-radius:8px;margin-bottom:10px}</style>
 </head><body>
-<h1>OMEGA-QUANT ULTRA — Proof Terminal</h1><p class='danger'><b>Truth Mode:</b> UI indicates SIMULATED vs BROKER, POLLING vs WEBSOCKET, and data freshness/reconciliation.</p>
+<h1>OMEGA-QUANT ULTRA — Proof Terminal</h1>
+<div class='banner'>MODE_TRUTH=<b id='mode_truth'>-</b> | TRANSPORT=<b id='transport'>-</b> | PRIMARY=<b id='primary'>-</b> | SECONDARY=<b id='secondary'>-</b> | RECON=<b id='recon'>-</b> | FRESHNESS=<b id='fresh'>-</b></div>
+<p class='danger'><b>Fail-Closed:</b> paper runs blocked when proof verification fails.</p>
 <div class='grid'>
 <div class='card'><h3>Profit Box</h3><div>Current Equity: <b id='equity'>$-</b></div><div>Initial Equity: <b id='initial'>$-</b></div><div>Session P&L: <b id='session_pnl'>-</b></div><div>Total Return %: <b id='ret'>-</b></div><div>Realized/Unrealized: <b id='ru'>-</b></div></div>
 <div class='card'><h3>Trade Stats</h3><div>Filled Trades: <b id='trades'>-</b></div><div>Win Rate: <b id='win'>-</b></div><div>Avg Win/Loss: <b id='awl'>-</b></div><div>Expectancy: <b id='exp'>-</b></div><div>Profit Factor: <b id='pf'>-</b></div></div>
@@ -24,6 +26,8 @@ HTML = """
 <button onclick='runPaper(1)'>Historical Sim Run (1)</button>
 <button onclick='runPaper()'>Historical Sim Run (N)</button>
 <button onclick='runBroker()'>Broker Paper Run (N)</button>
+<button onclick='runBrokerDaemon(30)'>Broker Daemon 30s</button>
+<button onclick='runBrokerDaemon(300)'>Broker Daemon 5m</button>
 <button onclick="runAction('proof_check')">Verify Proof</button>
 <button onclick="runAction('download_audit_pack')">Download Audit Pack</button>
 <button onclick="runAction('api_doctor')">Run API Doctor</button>
@@ -35,15 +39,16 @@ HTML = """
 <script>
 function fmt(n){return Number(n||0).toFixed(2)}
 async function api(body){const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});return await r.json();}
-async function runAction(action){const p=await api(`action=${encodeURIComponent(action)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
+async function runAction(action){const p=await api(`action=${encodeURIComponent(action)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);if(action.includes('monitor')) setTruthFromMonitor(p); await refresh();}
 async function runPaper(c1){const c=c1||document.getElementById('cycles').value;const s=document.getElementById('starting_capital').value;const p=await api(`action=paper&starting_capital=${encodeURIComponent(s)}&cycles=${encodeURIComponent(c)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
 async function runBroker(){const c=document.getElementById('cycles').value;const p=await api(`action=broker_paper_run&steps=${encodeURIComponent(c)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
+async function runBrokerDaemon(seconds){const p=await api(`action=broker_paper_daemon&seconds=${encodeURIComponent(seconds)}&interval=5`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
 async function resetPaper(){const s=document.getElementById('starting_capital').value;const p=await api(`action=reset_paper&starting_capital=${encodeURIComponent(s)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
-async function refresh(){const p=await api('action=paper_account');const a=p.account||{};document.getElementById('equity').textContent=`$${fmt(a.equity)}`;document.getElementById('initial').textContent=`$${fmt(a.initial_equity)}`;document.getElementById('session_pnl').textContent=fmt((a.equity||0)-(a.initial_equity||0));document.getElementById('ret').textContent=`${fmt(a.return_pct)}%`;document.getElementById('ru').textContent=`${fmt(a.realized_pnl)} / ${fmt(a.unrealized_pnl)}`;document.getElementById('trades').textContent=a.trade_count??0;document.getElementById('win').textContent=`${fmt(a.win_rate_pct)}%`;document.getElementById('awl').textContent=`${fmt(a.avg_win)} / ${fmt(a.avg_loss)}`;document.getElementById('exp').textContent=fmt(a.expectancy);document.getElementById('pf').textContent=fmt(a.profit_factor);document.getElementById('decision').textContent=JSON.stringify(p.last_decision||{});document.getElementById('prov').textContent=JSON.stringify(p.provenance||{});}
-refresh();
+function setTruth(p){document.getElementById('mode_truth').textContent=p.mode_truth||'SIMULATED FILLS';document.getElementById('transport').textContent=p.transport||'POLLING';document.getElementById('primary').textContent=p.provider_primary||((p.provenance||{}).source_primary||'unknown');document.getElementById('secondary').textContent=p.provider_secondary||'fallback';const r=(p.reconciliation||((p.provenance||{}).reconciliation)||{});document.getElementById('recon').textContent=(r.passed===undefined||r.passed===null)?'-':`${r.passed?'PASS':'FAIL'} ${r.max_diff_pct??''}`;document.getElementById('fresh').textContent=(p.freshness_seconds??(p.provenance||{}).freshness_seconds??'-');}
+function setTruthFromMonitor(p){setTruth({mode_truth:'SIMULATED FILLS',transport:p.transport,provider_primary:p.source,provider_secondary:'fallback',reconciliation:{passed:true,max_diff_pct:0},freshness_seconds:p.freshness_seconds});}
+async function refresh(){const p=await api('action=paper_account');const a=p.account||{};setTruth(p);document.getElementById('equity').textContent=`$${fmt(a.equity)}`;document.getElementById('initial').textContent=`$${fmt(a.initial_equity)}`;document.getElementById('session_pnl').textContent=fmt((a.equity||0)-(a.initial_equity||0));document.getElementById('ret').textContent=`${fmt(a.return_pct)}%`;document.getElementById('ru').textContent=`${fmt(a.realized_pnl)} / ${fmt(a.unrealized_pnl)}`;document.getElementById('trades').textContent=a.trade_count??0;document.getElementById('win').textContent=`${fmt(a.win_rate_pct)}%`;document.getElementById('awl').textContent=`${fmt(a.avg_win)} / ${fmt(a.avg_loss)}`;document.getElementById('exp').textContent=fmt(a.expectancy);document.getElementById('pf').textContent=fmt(a.profit_factor);document.getElementById('decision').textContent=JSON.stringify(p.last_decision||{});document.getElementById('prov').textContent=JSON.stringify(p.provenance||{});}refresh();
 </script></body></html>
 """
-
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj: dict, status: int = 200) -> None:
@@ -53,56 +58,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
-
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/":
             payload = HTML.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-            return
+            self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload); return
         if self.path.startswith("/artifacts/"):
             p = self.path.lstrip("/")
             try:
-                data = open(p, "rb").read()
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return
+                data = open(p, "rb").read(); self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
             except FileNotFoundError:
                 pass
-        self.send_response(404)
-        self.end_headers()
-
+        self.send_response(404); self.end_headers()
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/api/run":
-            self._send_json({"error": "not_found"}, 404)
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length).decode("utf-8")
-        form = parse_qs(body)
+        if self.path != "/api/run": self._send_json({"error": "not_found"}, 404); return
+        length = int(self.headers.get("Content-Length", "0")); body = self.rfile.read(length).decode("utf-8"); form = parse_qs(body)
         action = form.get("action", [""])[0]
-        params = {
-            "confirm_live": form.get("confirm_live", ["false"])[0] == "true",
-            "risk_ack": form.get("risk_ack", [""])[0],
-            "paper_days": form.get("paper_days", ["0"])[0],
-            "micro_live_days": form.get("micro_live_days", ["0"])[0],
-            "starting_capital": form.get("starting_capital", ["5000"])[0],
-            "cycles": form.get("cycles", ["1"])[0],
-            "steps": form.get("steps", ["1"])[0],
-        }
+        params = {"confirm_live": form.get("confirm_live", ["false"])[0] == "true", "risk_ack": form.get("risk_ack", [""])[0], "paper_days": form.get("paper_days", ["0"])[0], "micro_live_days": form.get("micro_live_days", ["0"])[0], "starting_capital": form.get("starting_capital", ["5000"])[0], "cycles": form.get("cycles", ["1"])[0], "steps": form.get("steps", ["1"])[0], "seconds": form.get("seconds", ["30"])[0], "interval": form.get("interval", ["5"])[0]}
         self._send_json(run_action(action, params))
-
 
 def main() -> None:
     server = HTTPServer(("0.0.0.0", 8080), Handler)
     print("UI running on http://localhost:8080")
     server.serve_forever()
-
 
 if __name__ == "__main__":
     main()

@@ -63,3 +63,12 @@ def test_broker_paper_disabled_without_doctor(monkeypatch):
     monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
     out = run_action("broker_paper_run", {"steps": 1})
     assert out["status"] == "HALT"
+
+
+def test_ui_truth_payload_present(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_action("reset_paper", {"starting_capital": 2000})
+    out = run_action("paper_account")
+    assert "mode_truth" in out
+    assert "transport" in out
+    assert "freshness_seconds" in out

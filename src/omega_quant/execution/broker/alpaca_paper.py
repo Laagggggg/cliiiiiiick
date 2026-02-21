@@ -25,27 +25,46 @@ class AlpacaPaperBroker:
             "Content-Type": "application/json",
         }
 
-    def _request(self, method: str, path: str, payload: dict | None = None, query: dict[str, str] | None = None) -> dict:
+    def _request(self, method: str, path: str, payload: dict | None = None, query: dict[str, str] | None = None) -> dict | list:
         q = f"?{urlencode(query)}" if query else ""
         url = f"{self.base}{path}{q}"
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = Request(url, data=data, headers=self._headers(), method=method)
         try:
-            with urlopen(req, timeout=15) as resp:
+            with urlopen(req, timeout=20) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="ignore")
             raise RuntimeError(f"alpaca broker error {exc.code}: {body}") from exc
 
     def get_account(self) -> dict:
-        return self._request("GET", "/v2/account")
+        return self._request("GET", "/v2/account")  # type: ignore[return-value]
 
-    def place_market_order(self, symbol: str, side: str, qty: float) -> dict:
-        return self._request(
-            "POST",
-            "/v2/orders",
-            {"symbol": symbol, "qty": str(qty), "side": side.lower(), "type": "market", "time_in_force": "day"},
-        )
+    def list_orders(self, status: str = "open", limit: int = 50) -> list[dict]:
+        out = self._request("GET", "/v2/orders", query={"status": status, "limit": str(limit), "direction": "desc"})
+        return out if isinstance(out, list) else []
+
+    def list_positions(self) -> list[dict]:
+        out = self._request("GET", "/v2/positions")
+        return out if isinstance(out, list) else []
+
+    def place_market_order(self, symbol: str, side: str, qty: float, client_order_id: str | None = None) -> dict:
+        payload = {
+            "symbol": symbol,
+            "qty": str(qty),
+            "side": side.lower(),
+            "type": "market",
+            "time_in_force": "day",
+        }
+        if client_order_id:
+            payload["client_order_id"] = client_order_id
+        return self._request("POST", "/v2/orders", payload)  # type: ignore[return-value]
 
     def get_order(self, order_id: str) -> dict:
-        return self._request("GET", f"/v2/orders/{order_id}")
+        return self._request("GET", f"/v2/orders/{order_id}")  # type: ignore[return-value]
+
+    def get_order_by_client_id(self, client_order_id: str) -> dict | None:
+        try:
+            return self._request("GET", "/v2/orders:by_client_order_id", query={"client_order_id": client_order_id})  # type: ignore[return-value]
+        except Exception:  # noqa: BLE001
+            return None
