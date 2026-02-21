@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from omega_quant.data.providers.base import Bar, MarketDataProvider
+from omega_quant.data.providers.base import Bar, MarketDataProvider, Quote
 
 
 class CsvMarketDataProvider(MarketDataProvider):
@@ -35,3 +35,9 @@ class CsvMarketDataProvider(MarketDataProvider):
             for r in rows
         ]
         return bars[-limit:]
+
+    def get_quote(self, symbol: str) -> Quote | None:
+        b = self.get_latest_bar(symbol, "1h")
+        mid = b.close
+        spread = max(0.01, mid * 0.0002)
+        return Quote(timestamp=b.timestamp, bid=mid - spread / 2, ask=mid + spread / 2)

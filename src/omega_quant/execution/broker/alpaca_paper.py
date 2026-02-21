@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import json
+import os
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+
+class AlpacaPaperBroker:
+    def __init__(self) -> None:
+        self.key = os.getenv("ALPACA_API_KEY", "")
+        self.secret = os.getenv("ALPACA_API_SECRET", "")
+        self.base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+    def enabled(self) -> bool:
+        return bool(self.key and self.secret)
+
+    def _headers(self) -> dict[str, str]:
+        if not self.enabled():
+            raise RuntimeError("broker disabled: missing ALPACA keys")
+        return {
+            "APCA-API-KEY-ID": self.key,
+            "APCA-API-SECRET-KEY": self.secret,
+            "Content-Type": "application/json",
+        }
+
+    def _request(self, method: str, path: str, payload: dict | None = None, query: dict[str, str] | None = None) -> dict:
+        q = f"?{urlencode(query)}" if query else ""
+        url = f"{self.base}{path}{q}"
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = Request(url, data=data, headers=self._headers(), method=method)
+        try:
+            with urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"alpaca broker error {exc.code}: {body}") from exc
+
+    def get_account(self) -> dict:
+        return self._request("GET", "/v2/account")
+
+    def place_market_order(self, symbol: str, side: str, qty: float) -> dict:
+        return self._request(
+            "POST",
+            "/v2/orders",
+            {"symbol": symbol, "qty": str(qty), "side": side.lower(), "type": "market", "time_in_force": "day"},
+        )
+
+    def get_order(self, order_id: str) -> dict:
+        return self._request("GET", f"/v2/orders/{order_id}")

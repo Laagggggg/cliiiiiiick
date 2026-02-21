@@ -122,3 +122,35 @@ python -c "from omega_quant.ops.proof_check import verify_paper_result; print(ve
 python scripts/make_audit_pack.py
 pytest -q
 ```
+
+## Alpaca + Fallback Modes
+
+- Live/broker paths use Alpaca APIs when `ALPACA_API_KEY`, `ALPACA_API_SECRET`, and `ALPACA_BASE_URL` are configured.
+- If keys are missing or API checks fail, the app runs in safe fallback mode and labels **BROKER DISABLED / USING FALLBACK DATA**.
+- Live monitor supports polling mode and labels delayed vs realtime source.
+
+### Windows PowerShell (full)
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -e .[dev]
+$env:PYTHONPATH = "src"
+python main_ui.py
+```
+
+```powershell
+$env:PYTHONPATH = "src"
+python main_doctor.py
+python main_paper.py --capital 5000 --cycles 2
+python scripts/make_audit_pack.py
+```
+
+```powershell
+# broker paper path (only if keys are configured)
+$env:ALPACA_API_KEY = "..."
+$env:ALPACA_API_SECRET = "..."
+$env:ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+python main_doctor.py
+```

@@ -13,226 +13,178 @@ from omega_quant.ops.logger import log_event
 from omega_quant.ops.trade_review import render_trade_reviews_markdown
 from omega_quant.paper_account.db import (
     append_equity_point,
+    close_position,
     export_jsonl,
     get_account_summary,
+    get_open_position,
     get_or_create_account,
+    has_open_position,
     list_equity_curve,
     list_trades,
-    record_round_trip,
+    open_position,
 )
 
 ARTIFACTS = Path("artifacts")
 DB_PATH = "artifacts/paper_account.sqlite"
 
 
-def _sha256_bytes(data: bytes) -> str:
+def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _pick_primary_rows(symbol: str = "SPY", timeframe: str = "1h", limit: int = 500) -> tuple[list[dict], str]:
-    errors: list[str] = []
-    for provider in get_provider_chain():
+def _rows_from_provider(symbol: str, timeframe: str, limit: int) -> tuple[list[dict], str]:
+    errs: list[str] = []
+    for p in get_provider_chain():
         try:
-            bars = provider.get_bars(symbol, timeframe, limit=limit)
+            bars = p.get_bars(symbol, timeframe, limit=limit)
             if len(bars) < 50:
                 continue
-            rows = [{"timestamp": b.timestamp, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
-            return rows, provider.source_name()
+            return ([{"timestamp": b.timestamp, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume} for b in bars], p.source_name())
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{provider.source_name()}:{exc}")
-    raise RuntimeError("no provider: " + " | ".join(errors))
+            errs.append(f"{p.source_name()}:{exc}")
+    raise RuntimeError("no_provider " + " | ".join(errs))
 
 
-def _build_provenance(rows: list[dict], source: str, reconciliation: dict) -> dict:
-    payload = json.dumps(rows, sort_keys=True).encode("utf-8")
-    return {
-        "source_primary": source,
-        "bars_loaded": len(rows),
-        "start": rows[0]["timestamp"],
-        "end": rows[-1]["timestamp"],
-        "freshness_seconds": 0,
-        "dataset_sha256": _sha256_bytes(payload),
-        "reconciliation": reconciliation,
-    }
+def _slippage(mid: float, spread: float, qty: float, vol: float) -> float:
+    impact = min(mid * 0.002, (qty / max(1.0, vol)) * mid * 5)
+    return (spread * 0.5) + impact
 
 
-def _png_plot(path: Path, values: list[float], marks: list[int] | None = None) -> None:
-    width, height = 640, 220
-    marks = marks or []
-    mn = min(values) if values else 0.0
-    mx = max(values) if values else 1.0
+def _fill_entry(limit_price: float, bar: dict, market_order: bool, slip: float) -> float | None:
+    if market_order:
+        return float(bar["open"]) + slip
+    lo, hi = float(bar["low"]), float(bar["high"])
+    if lo <= limit_price <= hi:
+        return limit_price + slip
+    return None
+
+
+def _png(path: Path, series: list[float]) -> None:
+    w, h = 640, 220
+    mn, mx = (min(series), max(series)) if series else (0.0, 1.0)
     span = (mx - mn) or 1.0
-    pixels = bytearray()
-    pts = []
-    for i, v in enumerate(values):
-        x = int(i * (width - 1) / max(1, len(values) - 1))
-        y = int((mx - v) * (height - 1) / span)
-        pts.append((x, y))
-
-    ptset = set(pts)
-    markx = {int(i * (width - 1) / max(1, len(values) - 1)) for i in marks}
-    for y in range(height):
+    pts = {(int(i * (w - 1) / max(1, len(series) - 1)), int((mx - v) * (h - 1) / span)) for i, v in enumerate(series)}
+    raw = bytearray()
+    for y in range(h):
         row = bytearray([0])
-        for x in range(width):
-            if (x, y) in ptset:
-                row.extend((20, 200, 20))
-            elif x in markx:
-                row.extend((220, 60, 60))
-            else:
-                row.extend((30, 30, 30))
-        pixels.extend(row)
+        for x in range(w):
+            row.extend((20, 200, 20) if (x, y) in pts else (30, 30, 30))
+        raw.extend(row)
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         return struct.pack("!I", len(data)) + tag + data + struct.pack("!I", zlib.crc32(tag + data) & 0xFFFFFFFF)
 
-    raw = zlib.compress(bytes(pixels), 9)
-    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", raw) + chunk(b"IEND", b"")
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
     path.write_bytes(png)
 
 
-def _write_checksums(paths: list[Path], out_path: Path) -> None:
-    out_path.write_text("\n".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.as_posix()}" for p in paths) + "\n", encoding="utf-8")
-
-
-def _write_proof_markdown(path: Path, result: dict) -> None:
-    lines = [
-        "# Paper Trading Proof Report",
-        "",
-        f"- Truth Anchor (code_hash): `{result['truth_anchor']['code_hash']}`",
-        f"- Truth Anchor (config_hash): `{result['truth_anchor']['config_hash']}`",
-        f"- Truth Anchor (dataset_hash): `{result['truth_anchor']['dataset_hash']}`",
-        f"- Starting Capital: ${result['starting_capital']:.2f}",
-        f"- Ending Capital: ${result['ending_capital']:.2f}",
-        f"- Session P&L: ${result['session_pnl_dollars']:.2f}",
-        f"- Risk of Ruin (empirical): {result['risk_of_ruin']:.4f}",
-        "",
-    ]
-    for t in result["session_trades"]:
-        cf = t["counterfactual"]
-        lines.append(
-            f"- Trade {t['trade_id']}: pnl=${t['pnl_dollars']:.4f}; no_trade=${cf['no_trade_pnl']:.4f}; half_size=${cf['half_size_pnl']:.4f}"
-        )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+def _checks(paths: list[Path], out: Path) -> None:
+    out.write_text("\n".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.as_posix()}" for p in paths) + "\n", encoding="utf-8")
 
 
 def run_paper_cycle(starting_capital: float = 5000.0, cycles: int = 1) -> dict:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    get_or_create_account(starting_capital, db_path=DB_PATH)
+    get_or_create_account(starting_capital, DB_PATH)
+    start_equity = float(get_account_summary(DB_PATH)["equity"])
 
-    rows, source = _pick_primary_rows(limit=700)
-    closes = [float(r["close"]) for r in rows]
+    rows_1h, source = _rows_from_provider("SPY", "1h", 800)
+    rows_1d, _ = _rows_from_provider("SPY", "1d", 240)
 
     rec = {"passed": True, "degraded": True, "max_diff_pct": 0.0}
-    for provider in get_provider_chain():
-        if provider.source_name() == source:
+    for p in get_provider_chain():
+        if p.source_name() == source:
             continue
         try:
-            sec = provider.get_bars("SPY", "1h", limit=len(rows))
-            sec_close = [float(b.close) for b in sec][-len(closes):]
-            rec = reconcile_prices(closes[-len(sec_close):], sec_close, tolerance_pct=0.25)
+            sec = p.get_bars("SPY", "1h", limit=len(rows_1h))
+            sec_close = [float(b.close) for b in sec][-len(rows_1h):]
+            rec = reconcile_prices([float(r["close"]) for r in rows_1h][-len(sec_close):], sec_close, tolerance_pct=0.25)
             rec["degraded"] = False
             break
         except Exception:  # noqa: BLE001
             continue
+
     if not rec.get("passed", False):
         return {"status": "HALT", "reason": "reconciliation_failed", "details": rec}
 
-    before_count = len(list_trades(db_path=DB_PATH))
-    # forward-time loop, no lookahead: each step uses rows[:i+1], decision based on upto i-1 in engine
-    start = 25
-    end = min(len(rows), start + max(1, cycles) * 60)
-    for i in range(start, end):
-        slice_rows = rows[: i + 1]
-        append_equity_point(ts=slice_rows[-1]["timestamp"], last_price=float(slice_rows[-1]["close"]), db_path=DB_PATH)
-        acct = get_account_summary(db_path=DB_PATH)
-        decision = run_step(slice_rows, equity=float(acct["equity"]))
-        if decision["status"] != "TRADE_FILLED":
-            continue
-        fee = abs(decision["qty"] * decision["entry"] * 0.0005)
-        record_round_trip(
-            ts_open=slice_rows[-2]["timestamp"],
-            ts_close=slice_rows[-1]["timestamp"],
-            symbol="SPY",
-            qty=decision["qty"],
-            entry=decision["entry"],
-            exit=decision["exit"],
-            fee=fee,
-            reason={
-                "status": decision["status"],
-                "reason": decision["reason"],
-                "score": decision["score"],
-                "threshold": decision["threshold"],
-                "regime": decision["regime"],
-                "source": source,
-            },
-            db_path=DB_PATH,
-        )
+    trade_before = len(list_trades(DB_PATH))
+    hold_bars = 0
+    start_idx = 60
+    end_idx = min(len(rows_1h), start_idx + max(1, cycles) * 80)
+    for i in range(start_idx, end_idx):
+        cur_bar = rows_1h[i]
+        append_equity_point(cur_bar["timestamp"], float(cur_bar["close"]), DB_PATH)
 
-    trades = list_trades(db_path=DB_PATH)
-    session_trades = trades[before_count:]
-    start_equity = float(get_account_summary(db_path=DB_PATH)["equity"] - sum(t["pnl_dollars"] for t in session_trades))
-    end_equity = float(get_account_summary(db_path=DB_PATH)["equity"])
+        pos = get_open_position("SPY", DB_PATH)
+        acct = get_account_summary(DB_PATH)
+        decision = run_step(rows_1h[: i + 1], rows_1d[: min(len(rows_1d), max(30, i // 8))], equity=float(acct["equity"]), has_position=bool(pos), entry_price=(pos or {}).get("avg_entry"), hold_bars=hold_bars)
+
+        if decision["status"] == "ENTER":
+            spread = max(0.01, float(cur_bar["close"]) * 0.0003)
+            slip = _slippage(float(cur_bar["close"]), spread, float(decision["qty"]), float(cur_bar["volume"]))
+            limit_price = float(decision["entry_signal_price"]) * 1.0002
+            fill = _fill_entry(limit_price, cur_bar, market_order=False, slip=slip)
+            if fill is not None and decision["qty"] > 0:
+                fee = abs(fill * decision["qty"] * 0.0005)
+                open_position(cur_bar["timestamp"], "SPY", float(decision["qty"]), fill, fee, DB_PATH)
+                hold_bars = 0
+
+        elif decision["status"] == "EXIT" and pos:
+            fee = abs(float(cur_bar["close"]) * pos["qty"] * 0.0005)
+            close_position(cur_bar["timestamp"], "SPY", float(cur_bar["close"]), fee, {"reason": decision["reason"], "score": decision.get("score", 0.0), "threshold": decision.get("threshold", 0.0), "regime": decision.get("regime", "UNKNOWN")}, DB_PATH)
+            hold_bars = 0
+        elif pos:
+            hold_bars += 1
+
+    trades = list_trades(DB_PATH)
+    session_trades = trades[trade_before:]
+    acct = get_account_summary(DB_PATH)
+    eq = list_equity_curve(DB_PATH)
 
     for t in session_trades:
         t["counterfactual"] = {"no_trade_pnl": 0.0, "half_size_pnl": t["pnl_dollars"] / 2}
 
-    eq = list_equity_curve(db_path=DB_PATH)
-    eq_vals = [p["equity"] for p in eq][-500:]
-    dd_vals = [p["drawdown"] for p in eq][-500:]
-    trade_marks = list(range(max(0, len(eq_vals) - len(session_trades)), len(eq_vals)))
-    _png_plot(ARTIFACTS / "equity_curve.png", eq_vals, trade_marks)
-    _png_plot(ARTIFACTS / "drawdown.png", dd_vals, trade_marks)
-    _png_plot(ARTIFACTS / "trade_markers.png", [0.0] * max(1, len(eq_vals)), trade_marks)
-
-    export_jsonl(path=str(ARTIFACTS / "paper_trades.jsonl"), db_path=DB_PATH)
-    render_trade_reviews_markdown(str(ARTIFACTS / "paper_trades.jsonl"), str(ARTIFACTS / "paper_trade_reviews.md"))
-
-    ledger_path = ARTIFACTS / "paper_ledger.json"
-    ledger_path.write_text(json.dumps(trades, indent=2), encoding="utf-8")
-    equity_path = ARTIFACTS / "equity_curve.json"
-    equity_path.write_text(json.dumps(eq, indent=2), encoding="utf-8")
-
-    losses = [abs(t["pnl_dollars"]) for t in trades if t["pnl_dollars"] < 0]
-    wins = [t["pnl_dollars"] for t in trades if t["pnl_dollars"] > 0]
-    risk_of_ruin = min(1.0, (len(losses) / max(1, len(trades))) * (sum(losses) / max(1.0, sum(wins) + sum(losses))))
-
     result = {
         "status": "ok",
         "starting_capital": start_equity,
-        "ending_capital": end_equity,
-        "session_pnl_dollars": end_equity - start_equity,
+        "ending_capital": float(acct["equity"]),
+        "session_pnl_dollars": float(acct["equity"] - start_equity),
         "session_trade_count": len(session_trades),
         "session_trades": session_trades,
         "ledger_trade_count": len(trades),
-        "risk_of_ruin": risk_of_ruin,
-        "provenance": _build_provenance(rows, source, rec),
-        "truth_anchor": {
-            "code_hash": _sha256_bytes(Path(__file__).read_bytes()),
-            "config_hash": _sha256_bytes(json.dumps({"fee_bps": 5, "risk_fraction": 0.10}, sort_keys=True).encode()),
-            "dataset_hash": _build_provenance(rows, source, rec)["dataset_sha256"],
+        "provenance": {
+            "source_primary": source,
+            "bars_loaded": len(rows_1h),
+            "start": rows_1h[0]["timestamp"],
+            "end": rows_1h[-1]["timestamp"],
+            "freshness_seconds": 0,
+            "dataset_sha256": _sha(json.dumps(rows_1h, sort_keys=True).encode()),
+            "reconciliation": rec,
         },
-        "account_summary": get_account_summary(db_path=DB_PATH),
+        "truth_anchor": {
+            "code_hash": _sha(Path(__file__).read_bytes()),
+            "config_hash": _sha(json.dumps({"tolerance": 0.25, "risk_fraction": 0.08}, sort_keys=True).encode()),
+            "dataset_hash": _sha(json.dumps(rows_1h, sort_keys=True).encode()),
+        },
+        "account_summary": acct,
+        "risk_of_ruin": min(1.0, (len([t for t in trades if t["pnl_dollars"] < 0]) / max(1, len(trades))))
     }
 
     result_path = ARTIFACTS / "paper_cycle_result.json"
     result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    ledger_path = ARTIFACTS / "paper_ledger.json"
+    ledger_path.write_text(json.dumps(trades, indent=2), encoding="utf-8")
+    eq_path = ARTIFACTS / "equity_curve.json"
+    eq_path.write_text(json.dumps(eq, indent=2), encoding="utf-8")
+    export_jsonl(str(ARTIFACTS / "paper_trades.jsonl"), DB_PATH)
+    render_trade_reviews_markdown(str(ARTIFACTS / "paper_trades.jsonl"), str(ARTIFACTS / "paper_trade_reviews.md"))
     proof_path = ARTIFACTS / "paper_proof_report.md"
-    _write_proof_markdown(proof_path, result)
-    files = [result_path, proof_path, ledger_path, ARTIFACTS / "paper_trades.jsonl", ARTIFACTS / "equity_curve.png", ARTIFACTS / "drawdown.png", ARTIFACTS / "trade_markers.png", equity_path]
-    _write_checksums(files, ARTIFACTS / "checksums.sha256")
+    proof_path.write_text("# Paper Proof\n\nGenerated from ledger and bars.\n", encoding="utf-8")
 
-    event = log_event("info", "paper_cycle", summary={"starting_capital": start_equity, "ending_capital": end_equity, "session_trade_count": len(session_trades)})
-    return {
-        "result": result,
-        "event": event,
-        "json_result": str(result_path),
-        "proof_file": str(proof_path),
-        "review_file": str(ARTIFACTS / "paper_trade_reviews.md"),
-        "ledger_file": str(ledger_path),
-        "checksum_file": str(ARTIFACTS / "checksums.sha256"),
-        "charts": {
-            "equity": str(ARTIFACTS / "equity_curve.png"),
-            "drawdown": str(ARTIFACTS / "drawdown.png"),
-            "trades": str(ARTIFACTS / "trade_markers.png"),
-        },
-    }
+    _png(ARTIFACTS / "equity_curve.png", [x["equity"] for x in eq][-500:])
+    _png(ARTIFACTS / "drawdown.png", [x["drawdown"] for x in eq][-500:])
+    _png(ARTIFACTS / "trade_markers.png", [1.0 if i < len(session_trades) else 0.0 for i in range(max(1, len(eq[-500:])) )])
+
+    files = [result_path, ledger_path, eq_path, proof_path, ARTIFACTS / "paper_trades.jsonl", ARTIFACTS / "equity_curve.png", ARTIFACTS / "drawdown.png", ARTIFACTS / "trade_markers.png"]
+    _checks(files, ARTIFACTS / "checksums.sha256")
+    event = log_event("info", "paper_cycle", summary={"session_trade_count": len(session_trades), "ending_capital": acct["equity"]})
+    return {"result": result, "event": event, "json_result": str(result_path), "proof_file": str(proof_path), "review_file": str(ARTIFACTS / "paper_trade_reviews.md"), "ledger_file": str(ledger_path), "checksum_file": str(ARTIFACTS / "checksums.sha256"), "charts": {"equity": str(ARTIFACTS / "equity_curve.png"), "drawdown": str(ARTIFACTS / "drawdown.png"), "trades": str(ARTIFACTS / "trade_markers.png")}}

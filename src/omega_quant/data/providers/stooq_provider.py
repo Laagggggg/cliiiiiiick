@@ -13,20 +13,28 @@ class StooqDailyProvider(MarketDataProvider):
 
     def get_bars(self, symbol: str, timeframe: str, limit: int = 300) -> list[Bar]:
         stooq_symbol = symbol.lower() + ".us"
-        url = f"https://stooq.com/q/d/l/?s={stooq_symbol}&i=d"
+        interval = "d" if timeframe == "1d" else "60"
+        url = f"https://stooq.com/q/d/l/?s={stooq_symbol}&i={interval}"
         with urllib.request.urlopen(url, timeout=10) as resp:
             payload = resp.read().decode("utf-8")
         rows = list(csv.DictReader(io.StringIO(payload)))
-        bars = [
-            Bar(
-                timestamp=r["Date"] + "T00:00:00Z",
-                open=float(r["Open"]),
-                high=float(r["High"]),
-                low=float(r["Low"]),
-                close=float(r["Close"]),
-                volume=float(r["Volume"]),
+        bars = []
+        for r in rows:
+            if not r.get("Close"):
+                continue
+            ts = r.get("Date", "")
+            if timeframe == "1d":
+                ts += "T00:00:00Z"
+            else:
+                ts = r.get("Date") + "T" + r.get("Time", "00:00:00") + "Z"
+            bars.append(
+                Bar(
+                    timestamp=ts,
+                    open=float(r["Open"]),
+                    high=float(r["High"]),
+                    low=float(r["Low"]),
+                    close=float(r["Close"]),
+                    volume=float(r["Volume"]),
+                )
             )
-            for r in rows
-            if r.get("Close")
-        ]
         return bars[-limit:]
