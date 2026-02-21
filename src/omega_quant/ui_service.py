@@ -8,6 +8,7 @@ from pathlib import Path
 from omega_quant.execution.broker.alpaca_paper import AlpacaPaperBroker
 from omega_quant.live_gates import live_gates
 from omega_quant.monitor.live_monitor import run_live_monitor
+from omega_quant.ops.broker_paper_cycle import run_broker_paper_cycle
 from omega_quant.ops.master_validation import master_validation
 from omega_quant.ops.proof_check import verify_paper_result
 from omega_quant.paper_account.db import get_account_summary, reset_account
@@ -82,6 +83,14 @@ def run_action(action: str, params: dict | None = None) -> dict:
         proof = verify_paper_result()
         return {"status": "ok" if proof.get("ok") else "HALT", "mode": "paper", "cycle": out, "proof": proof, "account": get_account_summary(), **_last_cycle_payload()}
 
+    if action == "broker_paper_run":
+        doctor = _api_doctor()
+        if doctor.get("status") != "PASS":
+            return {"status": "HALT", "reason": "BROKER DISABLED / USING FALLBACK DATA", "doctor": doctor}
+        steps = int(params.get("steps", 1))
+        out = run_broker_paper_cycle(steps=steps)
+        return {"status": out.get("status", "HALT"), "mode": "broker_paper", "cycle": out, "account": get_account_summary(), **_last_cycle_payload()}
+
     if action == "paper_account":
         return {"status": "ok", "account": get_account_summary(), **_last_cycle_payload()}
     if action == "reset_paper":
@@ -97,7 +106,9 @@ def run_action(action: str, params: dict | None = None) -> dict:
         proc = subprocess.run(f"python {script}", shell=True, capture_output=True, text=True)
         return {"status": "ok" if proc.returncode == 0 else "error", "output": proc.stdout.strip(), "stderr": proc.stderr.strip()}
     if action == "live_monitor":
-        return run_live_monitor(mode=str(params.get("mode", "polling")))
+        return run_live_monitor(mode="polling")
+    if action == "websocket_monitor":
+        return run_live_monitor(mode="websocket")
     if action == "api_doctor":
         return _api_doctor()
     if action == "dry_run":

@@ -26,6 +26,7 @@ def main() -> None:
         "drawdown.png",
         "trade_markers.png",
         "checksums.sha256",
+        "doctor_report.json",
     ]
     for name in include:
         src = ARTIFACTS / name

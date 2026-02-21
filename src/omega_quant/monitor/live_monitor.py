@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from omega_quant.data.providers import get_provider_chain
 from omega_quant.engine import run_step
+from omega_quant.monitor.live_ws import run_live_websocket
 
 
 def _freshness(ts: str) -> int:
@@ -15,6 +16,11 @@ def _freshness(ts: str) -> int:
 
 
 def run_live_monitor(mode: str = "polling") -> dict:
+    ws_probe = None
+    if mode == "websocket":
+        ws_probe = run_live_websocket("SPY")
+        mode = "polling"
+
     errors: list[str] = []
     for provider in get_provider_chain():
         try:
@@ -24,10 +30,13 @@ def run_live_monitor(mode: str = "polling") -> dict:
             shadow = run_step(rows, rows[-20:] if len(rows) >= 20 else rows, equity=5000.0, has_position=False)
             fresh = _freshness(rows[-1]["timestamp"])
             ready = "GREEN" if shadow.get("status") == "ENTER" and fresh < 1800 else ("YELLOW" if fresh < 7200 else "RED")
+            transport = "POLLING"
+            if ws_probe and not ws_probe.get("ok"):
+                transport = ws_probe.get("transport", "WEBSOCKET FAILED -> POLLING")
             return {
                 "status": "ok",
                 "mode": "live_monitor",
-                "transport": "POLLING MODE" if mode != "websocket" else "WEBSOCKET REQUESTED (fallback polling)",
+                "transport": transport,
                 "source": provider.source_name(),
                 "latest_bar": rows[-1],
                 "live_price": q.ask if q else rows[-1]["close"],
@@ -43,7 +52,16 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 },
                 "readiness": ready,
                 "monitor_safe": True,
+                "ws_probe": ws_probe,
             }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")
-    return {"status": "HALT", "mode": "live_monitor", "transport": "POLLING MODE", "errors": errors, "readiness": "RED", "monitor_safe": True}
+    return {
+        "status": "HALT",
+        "mode": "live_monitor",
+        "transport": ws_probe.get("transport", "POLLING") if ws_probe else "POLLING",
+        "errors": errors,
+        "readiness": "RED",
+        "monitor_safe": True,
+        "ws_probe": ws_probe,
+    }

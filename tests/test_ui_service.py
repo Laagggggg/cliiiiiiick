@@ -48,3 +48,18 @@ def test_api_doctor_warn_without_keys(monkeypatch):
     monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
     out = run_action("api_doctor")
     assert out["status"] == "WARN"
+
+
+def test_websocket_fallback_label(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("omega_quant.monitor.live_monitor.get_provider_chain", lambda: [CsvMarketDataProvider()])
+    out = run_action("websocket_monitor")
+    assert "POLLING" in out.get("transport", "")
+
+
+def test_broker_paper_disabled_without_doctor(monkeypatch):
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
+    out = run_action("broker_paper_run", {"steps": 1})
+    assert out["status"] == "HALT"

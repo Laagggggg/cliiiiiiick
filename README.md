@@ -154,3 +154,17 @@ $env:ALPACA_API_SECRET = "..."
 $env:ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 python main_doctor.py
 ```
+
+## Broker Paper + Websocket Notes
+
+- Broker paper runner: `main_broker_paper.py` (requires successful API doctor + Alpaca keys).
+- Live monitor websocket button is best-effort; if websocket cannot be established, UI labels **WEBSOCKET FAILED -> POLLING**.
+- Truth mode labels in UI distinguish **SIMULATED FILLS** vs **BROKER FILLS**.
+
+### Extra Windows commands
+
+```powershell
+$env:PYTHONPATH = "src"
+python main_broker_paper.py --steps 2
+python -c "from omega_quant.ui_service import run_action; print(run_action('websocket_monitor'))"
+```

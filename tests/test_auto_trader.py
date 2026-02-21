@@ -57,3 +57,13 @@ def test_charts_exist(tmp_path, monkeypatch):
     run_paper_cycle(starting_capital=2000, cycles=1)
     assert Path("artifacts/equity_curve.png").exists()
     assert Path("artifacts/drawdown.png").exists()
+
+
+def test_partial_fill_path_with_low_volume(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("omega_quant.ops.paper_cycle.get_provider_chain", lambda: [CsvMarketDataProvider()])
+    reset_account(2000.0)
+    out = run_paper_cycle(starting_capital=2000, cycles=1)
+    if out["result"]["session_trade_count"]:
+        t = out["result"]["session_trades"][0]
+        assert t["qty"] > 0

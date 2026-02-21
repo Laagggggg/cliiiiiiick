@@ -8,9 +8,9 @@ from omega_quant.ui_service import run_action
 
 HTML = """
 <!doctype html><html><head><meta charset='utf-8'><title>OMEGA QUANT Proof Terminal</title>
-<style>body{font-family:Arial;margin:18px;max-width:1200px}.card{border:1px solid #ccc;border-radius:10px;padding:12px;margin-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{margin:3px;padding:8px}pre{background:#111;color:#0f0;padding:10px;border-radius:8px;overflow:auto}.danger{color:#a00}</style>
+<style>body{font-family:Arial;margin:18px;max-width:1280px}.card{border:1px solid #ccc;border-radius:10px;padding:12px;margin-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{margin:3px;padding:8px}pre{background:#111;color:#0f0;padding:10px;border-radius:8px;overflow:auto}.danger{color:#a00}</style>
 </head><body>
-<h1>OMEGA-QUANT ULTRA — Proof Terminal</h1><p class='danger'><b>Fail-Closed:</b> paper runs blocked when proof verification fails.</p>
+<h1>OMEGA-QUANT ULTRA — Proof Terminal</h1><p class='danger'><b>Truth Mode:</b> UI indicates SIMULATED vs BROKER, POLLING vs WEBSOCKET, and data freshness/reconciliation.</p>
 <div class='grid'>
 <div class='card'><h3>Profit Box</h3><div>Current Equity: <b id='equity'>$-</b></div><div>Initial Equity: <b id='initial'>$-</b></div><div>Session P&L: <b id='session_pnl'>-</b></div><div>Total Return %: <b id='ret'>-</b></div><div>Realized/Unrealized: <b id='ru'>-</b></div></div>
 <div class='card'><h3>Trade Stats</h3><div>Filled Trades: <b id='trades'>-</b></div><div>Win Rate: <b id='win'>-</b></div><div>Avg Win/Loss: <b id='awl'>-</b></div><div>Expectancy: <b id='exp'>-</b></div><div>Profit Factor: <b id='pf'>-</b></div></div>
@@ -19,14 +19,16 @@ HTML = """
 </div>
 <div class='card'><h3>Actions</h3>
 <label>Paper Start $ <input id='starting_capital' value='5000'></label>
-<label>Cycles <input id='cycles' value='2'></label><br>
+<label>Cycles/Steps <input id='cycles' value='2'></label><br>
 <button onclick='resetPaper()'>Reset Paper Account</button>
-<button onclick='runPaper(1)'>Run Historical Paper (1)</button>
-<button onclick='runPaper()'>Run Historical Paper (N)</button>
-<button onclick="runAction('proof_check')">Verify Proof Integrity</button>
+<button onclick='runPaper(1)'>Historical Sim Run (1)</button>
+<button onclick='runPaper()'>Historical Sim Run (N)</button>
+<button onclick='runBroker()'>Broker Paper Run (N)</button>
+<button onclick="runAction('proof_check')">Verify Proof</button>
 <button onclick="runAction('download_audit_pack')">Download Audit Pack</button>
-<button onclick="runAction('live_monitor')">Live Monitor</button>
 <button onclick="runAction('api_doctor')">Run API Doctor</button>
+<button onclick="runAction('live_monitor')">Live Monitor (Polling)</button>
+<button onclick="runAction('websocket_monitor')">Live Monitor (Websocket)</button>
 </div>
 <div class='card'><h3>Charts</h3><a href='artifacts/equity_curve.png'>equity_curve.png</a> | <a href='artifacts/drawdown.png'>drawdown.png</a> | <a href='artifacts/trade_markers.png'>trade_markers.png</a></div>
 <div class='card'><h3>Output</h3><pre id='out'>Ready</pre></div>
@@ -35,6 +37,7 @@ function fmt(n){return Number(n||0).toFixed(2)}
 async function api(body){const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});return await r.json();}
 async function runAction(action){const p=await api(`action=${encodeURIComponent(action)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
 async function runPaper(c1){const c=c1||document.getElementById('cycles').value;const s=document.getElementById('starting_capital').value;const p=await api(`action=paper&starting_capital=${encodeURIComponent(s)}&cycles=${encodeURIComponent(c)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
+async function runBroker(){const c=document.getElementById('cycles').value;const p=await api(`action=broker_paper_run&steps=${encodeURIComponent(c)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
 async function resetPaper(){const s=document.getElementById('starting_capital').value;const p=await api(`action=reset_paper&starting_capital=${encodeURIComponent(s)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
 async function refresh(){const p=await api('action=paper_account');const a=p.account||{};document.getElementById('equity').textContent=`$${fmt(a.equity)}`;document.getElementById('initial').textContent=`$${fmt(a.initial_equity)}`;document.getElementById('session_pnl').textContent=fmt((a.equity||0)-(a.initial_equity||0));document.getElementById('ret').textContent=`${fmt(a.return_pct)}%`;document.getElementById('ru').textContent=`${fmt(a.realized_pnl)} / ${fmt(a.unrealized_pnl)}`;document.getElementById('trades').textContent=a.trade_count??0;document.getElementById('win').textContent=`${fmt(a.win_rate_pct)}%`;document.getElementById('awl').textContent=`${fmt(a.avg_win)} / ${fmt(a.avg_loss)}`;document.getElementById('exp').textContent=fmt(a.expectancy);document.getElementById('pf').textContent=fmt(a.profit_factor);document.getElementById('decision').textContent=JSON.stringify(p.last_decision||{});document.getElementById('prov').textContent=JSON.stringify(p.provenance||{});}
 refresh();
@@ -90,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
             "micro_live_days": form.get("micro_live_days", ["0"])[0],
             "starting_capital": form.get("starting_capital", ["5000"])[0],
             "cycles": form.get("cycles", ["1"])[0],
-            "mode": form.get("mode", ["polling"])[0],
+            "steps": form.get("steps", ["1"])[0],
         }
         self._send_json(run_action(action, params))
 
