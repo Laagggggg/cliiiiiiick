@@ -1,61 +1,47 @@
 from __future__ import annotations
 
 
-def run_step(closes: list[float], equity: float) -> dict:
-    """Canonical strategy step used by paper/backtest/monitor code paths.
+def run_step(rows: list[dict], equity: float) -> dict:
+    if len(rows) < 25:
+        return {"status": "NO_TRADE", "reason": "insufficient_bars", "score": 0.0, "threshold": 0.25, "regime": "UNKNOWN"}
 
-    The engine computes a decision from historical closes only and, when trading,
-    uses real bar closes for both entry and exit prices:
-      - entry: previous bar close
-      - exit: latest bar close
-    """
-    if len(closes) < 22:
+    closes = [float(r["close"]) for r in rows]
+    # no-lookahead: decision uses rows up to i-1; execution uses i
+    decision_slice = closes[:-1]
+    exec_bar_close = closes[-1]
+
+    sma_fast = sum(decision_slice[-5:]) / 5.0
+    sma_slow = sum(decision_slice[-20:]) / 20.0
+    momentum = (decision_slice[-1] - decision_slice[-5]) / decision_slice[-5]
+    volatility = max(1e-9, (max(decision_slice[-10:]) - min(decision_slice[-10:])) / decision_slice[-10])
+
+    score = max(0.0, momentum * 30.0)
+    threshold = 0.20 + min(0.20, volatility * 10.0)
+    regime = "TREND" if sma_fast > sma_slow else "MEAN_REVERT"
+
+    if score <= threshold:
         return {
             "status": "NO_TRADE",
-            "reason": "insufficient_bars",
-            "score": 0.0,
-            "threshold": 0.02,
-            "regime": "UNKNOWN",
-        }
-
-    sma5 = sum(closes[-6:-1]) / 5.0
-    sma20 = sum(closes[-21:-1]) / 20.0
-    trend_signal = (closes[-2] - closes[-6]) / closes[-6]
-    score = max(0.0, trend_signal * 40.0)
-    threshold = 0.02
-    regime = "TREND" if sma5 > sma20 else "MEAN_REVERT"
-
-    should_trade = score > threshold and closes[-2] > sma20
-    if not should_trade:
-        return {
-            "status": "NO_TRADE",
-            "reason": "score_or_bias_below_threshold",
+            "reason": f"Score {score:.3f} < threshold {threshold:.3f}",
             "score": score,
             "threshold": threshold,
             "regime": regime,
         }
 
-    entry = closes[-2]
-    exit_ = closes[-1]
-    qty = round((equity * 0.15) / entry, 6) if entry > 0 else 0.0
+    entry = decision_slice[-1]
+    exit_ = exec_bar_close
+    qty = round((equity * 0.10) / entry, 6) if entry > 0 else 0.0
     if qty <= 0:
-        return {
-            "status": "NO_TRADE",
-            "reason": "size_zero",
-            "score": score,
-            "threshold": threshold,
-            "regime": regime,
-        }
+        return {"status": "NO_TRADE", "reason": "size_zero", "score": score, "threshold": threshold, "regime": regime}
 
-    pnl = (exit_ - entry) * qty
     return {
         "status": "TRADE_FILLED",
-        "reason": "trend_above_threshold",
+        "reason": f"Score {score:.3f} >= threshold {threshold:.3f} in {regime}",
         "score": score,
         "threshold": threshold,
         "regime": regime,
         "entry": entry,
         "exit": exit_,
         "qty": qty,
-        "pnl": pnl,
+        "pnl": (exit_ - entry) * qty,
     }

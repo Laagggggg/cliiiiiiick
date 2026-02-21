@@ -3,7 +3,6 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-
 ARTIFACTS = Path("artifacts")
 OUT = Path("dist")
 
@@ -16,12 +15,16 @@ def main() -> None:
     tmp.mkdir(parents=True)
 
     include = [
-        "paper_account.sqlite3",
+        "paper_account.sqlite",
         "paper_cycle_result.json",
         "paper_proof_report.md",
         "paper_trade_reviews.md",
         "paper_ledger.json",
         "paper_trades.jsonl",
+        "equity_curve.json",
+        "equity_curve.png",
+        "drawdown.png",
+        "trade_markers.png",
         "checksums.sha256",
     ]
     for name in include:

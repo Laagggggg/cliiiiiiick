@@ -97,3 +97,28 @@ This is a robust base implementation focused on correctness and fail-closed beha
 - `artifacts/paper_cycle_result.json` → raw per-trade numbers
 - `artifacts/paper_proof_report.md` → human-readable proof table
 - `artifacts/paper_trade_reviews.md` → reason log per trade
+
+## Reality Upgrade Notes
+
+- Historical paper mode is forward-time and fail-closed; decisions use bars up to `i-1` and fills use real market bar closes at `i`.
+- Paper equity is persisted in `artifacts/paper_account.sqlite` and does **not** reset between runs unless `Reset Paper Account` is used.
+- `Verify Proof Integrity` recomputes equity from the ledger and blocks future paper runs if verification fails.
+- Live monitor is read-only (`shadow_decision`) and does not place orders.
+
+### Windows PowerShell quickstart
+
+```powershell
+python -m pip install -e .[dev]
+$env:PYTHONPATH = "src"
+python main_ui.py
+```
+
+### Core commands
+
+```powershell
+$env:PYTHONPATH = "src"
+python main_paper.py --capital 5000 --cycles 2
+python -c "from omega_quant.ops.proof_check import verify_paper_result; print(verify_paper_result())"
+python scripts/make_audit_pack.py
+pytest -q
+```

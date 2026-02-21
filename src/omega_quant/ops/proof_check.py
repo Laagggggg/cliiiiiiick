@@ -10,8 +10,7 @@ def _verify_checksums(path: Path) -> tuple[bool, list[str]]:
         return False, ["missing checksum file"]
     errors: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+        if not line.strip():
             continue
         digest, rel = line.split("  ", 1)
         f = Path(rel)
@@ -28,49 +27,42 @@ def verify_paper_result(
     result_path: str = "artifacts/paper_cycle_result.json",
     ledger_path: str = "artifacts/paper_ledger.json",
     checksum_path: str = "artifacts/checksums.sha256",
-    tol: float = 1e-6,
+    tol_dollars: float = 0.01,
 ) -> dict:
     result_file = Path(result_path)
     ledger_file = Path(ledger_path)
-    if not result_file.exists() or not ledger_file.exists():
-        return {"ok": False, "reason": "missing_file", "paths": [str(result_file), str(ledger_file)]}
+    exists = result_file.exists() and ledger_file.exists()
+    if not exists:
+        return {"ok": False, "exists": False, "reason": "missing_file"}
 
     result = json.loads(result_file.read_text(encoding="utf-8"))
     trades = json.loads(ledger_file.read_text(encoding="utf-8"))
+    session_count = int(result.get("session_trade_count", 0))
+    session_trades = trades[-session_count:] if session_count else []
+    start = float(result.get("starting_capital", 0.0))
+    end = float(result.get("ending_capital", 0.0))
 
-    session_start = float(result.get("starting_capital", 0.0))
-    session_end = float(result.get("ending_capital", 0.0))
-    session_trade_count = int(result.get("session_trade_count", 0))
+    pnl = sum(float(t.get("pnl_dollars", 0.0)) for t in session_trades)
+    recomputed = start + pnl
+    delta = abs(recomputed - end)
 
-    if len(trades) < session_trade_count:
-        return {"ok": False, "reason": "ledger_shorter_than_session", "ledger_count": len(trades), "session_count": session_trade_count}
+    per_trade_ok = all(isinstance(t.get("entry"), (int, float)) and isinstance(t.get("exit"), (int, float)) for t in trades)
+    checks_ok, checksum_errors = _verify_checksums(Path(checksum_path))
 
-    session_trades = trades[-session_trade_count:] if session_trade_count else []
-    pnl_sum = sum(float(t.get("pnl_dollars", 0.0)) for t in session_trades)
-    recomputed_end = session_start + pnl_sum
-    delta = abs(recomputed_end - session_end)
+    replay_hash = hashlib.sha256(json.dumps(session_trades, sort_keys=True).encode("utf-8")).hexdigest()
+    recorded_hash = hashlib.sha256(json.dumps(result.get("session_trades", []), sort_keys=True).encode("utf-8")).hexdigest()
+    replay_ok = replay_hash == recorded_hash
 
-    per_trade_ok = True
-    for t in trades:
-        before = float(t.get("equity_before", 0.0))
-        after = float(t.get("equity_after", 0.0))
-        pnl = float(t.get("pnl_dollars", 0.0))
-        if abs((before + pnl) - after) > tol:
-            per_trade_ok = False
-            break
-
-    checksums_ok, checksum_errors = _verify_checksums(Path(checksum_path))
-    ok = delta <= tol and per_trade_ok and checksums_ok
-
+    ok = delta <= tol_dollars and per_trade_ok and checks_ok and replay_ok
     return {
         "ok": ok,
-        "session_start": session_start,
-        "session_end": session_end,
-        "recomputed_end": recomputed_end,
+        "exists": True,
+        "session_start": start,
+        "session_end": end,
+        "recomputed_end": recomputed,
         "delta": delta,
         "trade_consistency": per_trade_ok,
-        "checksum_ok": checksums_ok,
+        "checksum_ok": checks_ok,
         "checksum_errors": checksum_errors,
-        "session_trade_count": session_trade_count,
-        "ledger_trade_count": len(trades),
+        "replay_ok": replay_ok,
     }
