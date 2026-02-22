@@ -1,0 +1,24 @@
+[project]
+name = "omega-quant"
+version = "0.1.0"
+description = "Fail-closed adaptive trading bot skeleton"
+requires-python = ">=3.10"
+dependencies = [
+  "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+omega-ui = "main_ui:main"
+omega-doctor = "main_doctor:main"
+omega-paper = "main_paper:main"
+omega-broker-paper = "main_broker_paper:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
