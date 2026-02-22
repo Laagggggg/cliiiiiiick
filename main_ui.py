@@ -50,13 +50,9 @@ async function runAction(action){const p=await api(`action=${encodeURIComponent(
 async function runWizard(){
   const s=document.getElementById('starting_capital').value;
   const c=document.getElementById('cycles').value;
-  const steps=[];
-  steps.push({step:'doctor', out: await api('action=api_doctor')});
-  steps.push({step:'reset_paper', out: await api(`action=reset_paper&starting_capital=${encodeURIComponent(s)}`)});
-  steps.push({step:'paper', out: await api(`action=paper&starting_capital=${encodeURIComponent(s)}&cycles=${encodeURIComponent(c)}`)});
-  steps.push({step:'proof_check', out: await api('action=proof_check')});
-  steps.push({step:'download_audit_pack', out: await api('action=download_audit_pack')});
-  document.getElementById('out').textContent=JSON.stringify({wizard:'complete',steps},null,2);
+  const out=await api(`action=wizard_run&starting_capital=${encodeURIComponent(s)}&cycles=${encodeURIComponent(c)}`);
+  document.getElementById('out').textContent=JSON.stringify(out,null,2);
+  setTruth(out);
   await refresh();
 }
 async function runPaper(c1){const c=c1||document.getElementById('cycles').value;const s=document.getElementById('starting_capital').value;const p=await api(`action=paper&starting_capital=${encodeURIComponent(s)}&cycles=${encodeURIComponent(c)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}

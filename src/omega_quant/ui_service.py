@@ -30,6 +30,7 @@ def _truth_defaults() -> dict:
         "reconciliation": {"passed": None, "max_diff_pct": None},
         "freshness_seconds": "unknown -> NEXT ACTION: Run API Doctor",
         "last_bar_ts": "unknown -> NEXT ACTION: Run live monitor",
+        "next_action": "Run API Doctor",
     }
 
 
@@ -52,6 +53,7 @@ def _last_cycle_payload() -> dict:
         "reconciliation": recon,
         "freshness_seconds": prov.get("freshness_seconds", "not loaded (run monitor)"),
         "last_bar_ts": prov.get("end", "not loaded (run monitor)"),
+        "next_action": "Run live monitor",
     }
 
 
@@ -127,12 +129,64 @@ def _paper_decision_sentence(cycle: dict) -> str:
         return f"TRADE: session_pnl=${pnl:.2f} ({pct:.2f}%) over {trades} trades"
     return "NO_TRADE: score<threshold or guards blocked entry"
 
+
+
+def _wizard_run(starting_capital: float, cycles: int) -> dict:
+    path = Path('artifacts/wizard_run.json')
+    if path.exists():
+        try:
+            state = json.loads(path.read_text(encoding='utf-8'))
+        except Exception:  # noqa: BLE001
+            state = {"steps": []}
+    else:
+        state = {"steps": []}
+
+    done = {x.get('step'): x for x in state.get('steps', []) if x.get('status') == 'ok'}
+
+    def step(name: str, action: str, params: dict | None = None) -> dict:
+        if name in done:
+            return done[name]
+        out = run_action(action, params or {})
+        rec = {"step": name, "status": "ok" if out.get('status') in {'ok', 'PASS'} else 'HALT', "output": out}
+        state.setdefault('steps', []).append(rec)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2), encoding='utf-8')
+        return rec
+
+    ordered = [
+        ('doctor', 'api_doctor', {}),
+        ('reset_paper', 'reset_paper', {'starting_capital': starting_capital}),
+        ('paper', 'paper', {'starting_capital': starting_capital, 'cycles': cycles}),
+        ('proof_check', 'proof_check', {}),
+        ('download_audit_pack', 'download_audit_pack', {}),
+    ]
+
+    results = []
+    for name, action, params in ordered:
+        r = step(name, action, params)
+        results.append(r)
+        if r['status'] != 'ok':
+            return {
+                'status': 'HALT',
+                'mode': 'wizard',
+                'steps': results,
+                'decision_sentence': f"HALT: wizard step={name} failed; NEXT_ACTION={r['output'].get('next_action','inspect output')}",
+                'next_action': r['output'].get('next_action', 'inspect output'),
+            }
+
+    return {'status': 'ok', 'mode': 'wizard', 'steps': results, 'decision_sentence': 'TRADE: wizard completed all safety/proof steps', 'next_action': 'Optional: configure Alpaca keys'}
+
 def run_action(action: str, params: dict | None = None) -> dict:
     params = params or {}
     metrics = default_metrics()
 
     if action == "validate":
         return master_validation(metrics, [1, 2, 3, 4, 5], [1.1, 2.1, 3.0, 3.9, 5.2])
+
+    if action == "wizard_run":
+        cap = float(params.get("starting_capital", 5000.0))
+        cyc = int(params.get("cycles", 1))
+        return _wizard_run(cap, cyc)
     if action == "report":
         return {"research_report": render_report(metrics), "checklist": render_go_no_go_markdown(metrics)}
 

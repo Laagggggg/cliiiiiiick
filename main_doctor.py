@@ -39,6 +39,20 @@ def api_doctor() -> dict:
     report["env"] = {k: bool(os.getenv(k)) for k in required}
     report["broker_enabled"] = all(report["env"].values())
 
+    # Windows-fragile command lint guard
+    fragile_hits: list[str] = []
+    for fp in Path('.').glob('*.md'):
+        txt = fp.read_text(encoding='utf-8', errors='ignore')
+        if '$(rg --files' in txt or '$(' in txt and 'powershell' in fp.name.lower():
+            fragile_hits.append(str(fp))
+    for fp in Path('.').glob('*.ps1'):
+        txt = fp.read_text(encoding='utf-8', errors='ignore')
+        if '$(rg --files' in txt:
+            fragile_hits.append(str(fp))
+    if fragile_hits:
+        report['errors'].append('windows_fragile_command_docs')
+        report['fragile_command_files'] = fragile_hits
+
     if not report["ws_available"]:
         report["errors"].append("missing_websockets_dependency")
 
@@ -78,7 +92,7 @@ def api_doctor() -> dict:
 
 def main() -> int:
     checks = [
-        ("compile", "python -m py_compile $(rg --files -g '*.py')"),
+        ("compile", "python -m compileall -q ."),
         ("tests", "pytest -q"),
         ("paper", "PYTHONPATH=src python main_paper.py --capital 3000 --cycles 1"),
     ]

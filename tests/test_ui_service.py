@@ -86,3 +86,21 @@ def test_replay_live_stream_action(tmp_path, monkeypatch):
     _ingest_raw({"T": "q", "S": "SPY", "bp": 99.0, "ap": 99.1, "t": "2026-01-01T02:00:00Z"})
     out = run_action("replay_live_stream")
     assert out["status"] == "ok"
+
+
+def test_truth_fields_never_blank(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_action("reset_paper", {"starting_capital": 2000})
+    out = run_action("paper_account")
+    keys = ["mode_truth", "transport", "provider_primary", "freshness_seconds", "last_bar_ts", "next_action"]
+    for k in keys:
+        assert k in out
+        assert str(out[k]).strip() != ""
+
+
+def test_wizard_run_creates_state_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("omega_quant.ops.paper_cycle.get_provider_chain", lambda: [CsvMarketDataProvider()])
+    out = run_action("wizard_run", {"starting_capital": 1000, "cycles": 1})
+    assert out["status"] in {"ok", "HALT"}
+    assert Path("artifacts/wizard_run.json").exists()
