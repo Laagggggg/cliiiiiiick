@@ -17,6 +17,7 @@ from omega_quant.paper_account.db import (
     get_account_summary,
     get_checkpoint,
     get_open_position,
+    get_latest_order_event_by_client_id,
     open_position,
     set_checkpoint,
 )
@@ -94,6 +95,9 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
     if d["status"] == "ENTER" and not pos:
         coid = _client_order_id("SPY", "buy", bar["timestamp"], float(d["qty"]))
         existing = broker.get_order_by_client_id(coid)
+        if not existing:
+            local_existing = get_latest_order_event_by_client_id(coid, DB_PATH)
+            existing = (local_existing or {}).get("payload") if local_existing else None
         detail = existing if existing else broker.place_market_order("SPY", "buy", float(d["qty"]), client_order_id=coid)
         oid = str(detail.get("id") or coid)
         od = broker.get_order(oid) if detail.get("id") else detail
@@ -107,6 +111,9 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
     if d["status"] == "EXIT" and pos:
         coid = _client_order_id("SPY", "sell", bar["timestamp"], float(pos["qty"]))
         existing = broker.get_order_by_client_id(coid)
+        if not existing:
+            local_existing = get_latest_order_event_by_client_id(coid, DB_PATH)
+            existing = (local_existing or {}).get("payload") if local_existing else None
         detail = existing if existing else broker.place_market_order("SPY", "sell", float(pos["qty"]), client_order_id=coid)
         oid = str(detail.get("id") or coid)
         od = broker.get_order(oid) if detail.get("id") else detail

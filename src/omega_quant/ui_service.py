@@ -115,6 +115,18 @@ def _api_doctor() -> dict:
     return out
 
 
+
+
+def _paper_decision_sentence(cycle: dict) -> str:
+    res = cycle.get("result", {})
+    trades = int(res.get("session_trade_count", 0))
+    pnl = float(res.get("session_pnl_dollars", 0.0))
+    cap = float(res.get("starting_capital", 0.0))
+    if trades > 0:
+        pct = (pnl / cap * 100.0) if cap else 0.0
+        return f"TRADE: session_pnl=${pnl:.2f} ({pct:.2f}%) over {trades} trades"
+    return "NO_TRADE: score<threshold or guards blocked entry"
+
 def run_action(action: str, params: dict | None = None) -> dict:
     params = params or {}
     metrics = default_metrics()
@@ -132,7 +144,8 @@ def run_action(action: str, params: dict | None = None) -> dict:
 
         out = run_paper_cycle(starting_capital=float(params.get("starting_capital", 5000.0)), cycles=int(params.get("cycles", 1)))
         proof = verify_paper_result()
-        return {"status": "ok" if proof.get("ok") else "HALT", "mode": "paper", "cycle": out, "proof": proof, "account": get_account_summary(), **_last_cycle_payload()}
+        sentence = _paper_decision_sentence(out)
+        return {"status": "ok" if proof.get("ok") else "HALT", "mode": "paper", "cycle": out, "proof": proof, "decision_sentence": sentence, "account": get_account_summary(), **_last_cycle_payload()}
 
     if action == "broker_paper_run":
         doctor = _api_doctor()
@@ -142,7 +155,8 @@ def run_action(action: str, params: dict | None = None) -> dict:
         out = run_broker_paper_cycle(steps=steps)
         payload = _last_cycle_payload()
         payload.update({"mode_truth": "BROKER FILLS"})
-        return {"status": out.get("status", "HALT"), "mode": "broker_paper", "cycle": out, "account": get_account_summary(), **payload}
+        sentence = out.get("decision_sentence") or f"{out.get('status','HALT')}: broker paper step completed"
+        return {"status": out.get("status", "HALT"), "mode": "broker_paper", "cycle": out, "decision_sentence": sentence, "account": get_account_summary(), **payload}
 
     if action == "broker_paper_daemon":
         doctor = _api_doctor()
@@ -153,7 +167,8 @@ def run_action(action: str, params: dict | None = None) -> dict:
         out = run_broker_paper_daemon(seconds=seconds, interval_s=interval)
         payload = _last_cycle_payload()
         payload.update({"mode_truth": "BROKER FILLS"})
-        return {"status": out.get("status", "HALT"), "mode": "broker_paper_daemon", "cycle": out, "account": get_account_summary(), **payload}
+        sentence = out.get("decision_sentence") or f"{out.get('status','HALT')}: broker daemon run completed"
+        return {"status": out.get("status", "HALT"), "mode": "broker_paper_daemon", "cycle": out, "decision_sentence": sentence, "account": get_account_summary(), **payload}
 
     if action == "paper_account":
         return {"status": "ok", "account": get_account_summary(), **_last_cycle_payload()}

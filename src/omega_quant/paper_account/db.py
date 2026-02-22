@@ -298,3 +298,15 @@ def export_recon_jsonl(path: str = "artifacts/recon_snapshots.jsonl", db_path: s
         for ts, payload_json in rows:
             f.write(json.dumps({"ts": ts, **json.loads(payload_json)}, sort_keys=True) + "\n")
     return str(p)
+
+
+def get_latest_order_event_by_client_id(client_order_id: str, db_path: str = DB_DEFAULT) -> dict[str, Any] | None:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT order_id,state,payload_json,ts FROM order_events WHERE client_order_id=? ORDER BY seq DESC LIMIT 1",
+            (client_order_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"order_id": row[0], "state": row[1], "payload": json.loads(row[2]), "ts": row[3]}

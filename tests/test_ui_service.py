@@ -13,6 +13,7 @@ def test_ui_actions_basic(tmp_path, monkeypatch):
     paper = run_action("paper", {"starting_capital": 9999, "cycles": 1})
     assert paper["mode"] == "paper"
     assert paper["status"] in {"ok", "HALT"}
+    assert "decision_sentence" in paper
 
     account = run_action("paper_account")
     assert account["status"] == "ok"

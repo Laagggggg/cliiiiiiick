@@ -98,3 +98,14 @@ def test_broker_recon_mismatch_halts(monkeypatch):
     out = daemon._step_once(DummyBroker(), DummyProvider())
     assert out["status"] == "HALT"
     assert out["reason"] == "RECON_MISMATCH"
+
+
+def test_websocket_journal_schema_fields(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    live_ws._ingest_raw({"T": "q", "S": "SPY", "bp": 100.0, "ap": 100.2, "t": "2026-01-01T00:00:00Z"})
+    line = open("artifacts/live_stream.jsonl", "r", encoding="utf-8").read().strip().splitlines()[-1]
+    import json
+    row = json.loads(line)
+    assert row["schema"] == "alpaca.marketdata.v2"
+    assert row["kind"] == "quote"
+    assert row["event_ts"] == "2026-01-01T00:00:00Z"
