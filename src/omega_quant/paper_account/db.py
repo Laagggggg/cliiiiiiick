@@ -69,6 +69,10 @@ def init_db(db_path: str = DB_DEFAULT) -> None:
                 unrealized REAL NOT NULL,
                 drawdown REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS system_kv (
+                k TEXT PRIMARY KEY,
+                v TEXT NOT NULL
+            );
             """
         )
 
@@ -107,6 +111,7 @@ def reset_account(starting_capital: float, db_path: str = DB_DEFAULT) -> dict[st
         conn.execute("DELETE FROM equity_curve")
         conn.execute("DELETE FROM account_state WHERE account_id='paper'")
         conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('fills','trades','equity_curve')")
+        conn.execute("DELETE FROM system_kv")
     return get_or_create_account(starting_capital, db_path)
 
 
@@ -215,6 +220,22 @@ def get_account_summary(db_path: str = DB_DEFAULT) -> dict[str, Any]:
         "return_pct": ((acct["equity"] - acct["initial_equity"]) / acct["initial_equity"] * 100.0) if acct["initial_equity"] else 0.0,
     }
 
+
+
+def get_checkpoint(key: str, db_path: str = DB_DEFAULT) -> str | None:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT v FROM system_kv WHERE k=?", (key,)).fetchone()
+        return row[0] if row else None
+
+
+def set_checkpoint(key: str, value: str, db_path: str = DB_DEFAULT) -> None:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO system_kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+            (key, value),
+        )
 
 def export_jsonl(path: str = "artifacts/paper_trades.jsonl", db_path: str = DB_DEFAULT) -> str:
     p = Path(path)

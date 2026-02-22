@@ -25,17 +25,17 @@ def _truth_defaults() -> dict:
     return {
         "mode_truth": "SIMULATED FILLS",
         "transport": "POLLING",
-        "provider_primary": "unknown",
-        "provider_secondary": "unknown",
+        "provider_primary": "fallback",
+        "provider_secondary": "none",
         "reconciliation": {"passed": None, "max_diff_pct": None},
-        "freshness_seconds": None,
+        "freshness_seconds": "not loaded (run monitor)",
     }
 
 
 def _last_cycle_payload() -> dict:
     p = Path("artifacts/paper_cycle_result.json")
     if not p.exists():
-        return {"last_decision": {"status": "NO_TRADE", "reason": "no_cycle_yet"}, **_truth_defaults()}
+        return {"last_decision": {"sentence": "NO_TRADE: run historical sim or monitor first"}, **_truth_defaults()}
     data = json.loads(p.read_text(encoding="utf-8"))
     last_reason = data.get("last_decision_reason", "NO_TRADE: no recent fills")
     prov = data.get("provenance", {})

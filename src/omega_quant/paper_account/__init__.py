@@ -4,12 +4,14 @@ from omega_quant.paper_account.db import (
     export_jsonl,
     get_account_summary,
     get_open_position,
+    get_checkpoint,
     get_or_create_account,
     has_open_position,
     list_equity_curve,
     list_trades,
     open_position,
     reset_account,
+    set_checkpoint,
 )
 
 __all__ = [
@@ -18,10 +20,12 @@ __all__ = [
     "export_jsonl",
     "get_account_summary",
     "get_open_position",
+    "get_checkpoint",
     "get_or_create_account",
     "has_open_position",
     "list_equity_curve",
     "list_trades",
     "open_position",
     "reset_account",
+    "set_checkpoint",
 ]
