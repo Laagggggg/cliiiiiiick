@@ -233,15 +233,21 @@ def get_account_summary(db_path: str = DB_DEFAULT) -> dict[str, Any]:
     avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
     win_rate = len(wins) / len(trades) if trades else 0.0
     expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss) if trades else 0.0
-    pf = (sum(wins) / abs(sum(losses))) if losses else 0.0
+    pf = (sum(wins) / abs(sum(losses))) if losses else None
+    trade_count = len(trades)
+    expectancy_conf = "low sample" if trade_count < 20 else "normal"
+    pf_label = "INF" if trade_count > 0 and not losses else (f"{pf:.2f}" if pf is not None else "N/A")
     return {
         **acct,
-        "trade_count": len(trades),
+        "trade_count": trade_count,
         "win_rate_pct": win_rate * 100.0,
         "avg_win": avg_win,
         "avg_loss": avg_loss,
         "expectancy": expectancy,
+        "expectancy_confidence": expectancy_conf,
         "profit_factor": pf,
+        "profit_factor_label": pf_label,
+        "win_rate_label": f"{win_rate * 100.0:.2f}% (n={trade_count})",
         "return_pct": ((acct["equity"] - acct["initial_equity"]) / acct["initial_equity"] * 100.0) if acct["initial_equity"] else 0.0,
     }
 

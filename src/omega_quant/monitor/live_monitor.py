@@ -15,11 +15,13 @@ def _freshness(ts: str) -> int:
         return 999999
 
 
-def _mode_truth(healthy: bool, fallback: bool) -> str:
+def _mode_truth(healthy: bool, fallback: bool, data_grade: str) -> str:
+    if data_grade == "CSV_SAMPLE":
+        return "DEMO"
     if healthy:
         return "LIVE_MONITOR_SAFE"
     if fallback:
-        return "LIVE_MONITOR_DEMO"
+        return "DEMO"
     return "LIVE_MONITOR_HALT"
 
 
@@ -42,6 +44,7 @@ def run_live_monitor(mode: str = "polling") -> dict:
 
             transport = "POLLING"
             source_primary = provider.source_name()
+            data_grade = "CSV_SAMPLE" if source_primary.startswith("csv:") else "FALLBACK_POLLING"
             source_secondary = "none"
             last_bar_ts = rows[-1]["timestamp"]
             fresh = _freshness(last_bar_ts)
@@ -60,13 +63,15 @@ def run_live_monitor(mode: str = "polling") -> dict:
                     transport = str(ws_state.get("transport", "REQUIRES ALPACA KEYS -> POLLING"))
                     fallback_reason = transport
 
-            healthy = fresh < 7200 and transport == "WEBSOCKET"
+            healthy = fresh < 7200 and transport == "WEBSOCKET" and data_grade != "CSV_SAMPLE"
             fallback = not healthy and transport != "WEBSOCKET"
             monitor_safe = healthy
             status = "ok" if (healthy or fallback) else "HALT"
-            mode_truth = _mode_truth(healthy, fallback)
+            mode_truth = _mode_truth(healthy, fallback, data_grade)
 
-            if status == "HALT":
+            if data_grade == "CSV_SAMPLE":
+                decision_sentence = "NO_TRADE: DEMO CSV sample data loaded; set Alpaca keys for live monitoring"
+            elif status == "HALT":
                 decision_sentence = f"HALT: freshness_seconds={fresh} or unavailable websocket; run API Doctor"
             elif fallback:
                 decision_sentence = f"NO_TRADE: {fallback_reason or 'fallback polling active'}"
@@ -77,18 +82,20 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 "status": status,
                 "mode": "live_monitor",
                 "mode_truth": mode_truth,
+                "data_grade": data_grade,
                 "transport": transport,
                 "source": source_primary,
                 "source_secondary": source_secondary,
                 "price": live_price,
-                "freshness_seconds": fresh,
+                "freshness_seconds": None if data_grade == "CSV_SAMPLE" else fresh,
+                "freshness_label": "N/A (static sample)" if data_grade == "CSV_SAMPLE" else str(fresh),
                 "last_bar_ts": last_bar_ts,
                 "shadow_decision": shadow,
                 "monitor_safe": monitor_safe,
                 "ready": "GREEN" if healthy and shadow.get("status") == "ENTER" else ("YELLOW" if fallback else "RED"),
                 "decision_sentence": decision_sentence,
                 "reconciliation": {"passed": True if healthy else None, "max_diff_pct": 0.0 if healthy else None},
-                "next_action": "Run websocket monitor with Alpaca keys" if fallback else "None",
+                "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else ("Run websocket monitor with Alpaca keys" if fallback else "None"),
             }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")
@@ -98,11 +105,13 @@ def run_live_monitor(mode: str = "polling") -> dict:
         "status": "HALT",
         "mode": "live_monitor",
         "mode_truth": "LIVE_MONITOR_HALT",
+        "data_grade": "FALLBACK_POLLING",
         "transport": "POLLING",
         "source": "none",
         "source_secondary": "none",
         "price": replay.get("last_price"),
         "freshness_seconds": 999999,
+        "freshness_label": "stale",
         "last_bar_ts": replay.get("last_bar_ts", ""),
         "shadow_decision": {"status": "NO_TRADE", "reason": "missing_live_data"},
         "monitor_safe": False,

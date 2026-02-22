@@ -23,14 +23,16 @@ def default_metrics() -> dict:
 
 def _truth_defaults() -> dict:
     return {
-        "mode_truth": "LIVE_MONITOR_DEMO",
+        "mode_truth": "DEMO",
+        "data_grade": "CSV_SAMPLE",
         "transport": "POLLING",
         "provider_primary": "fallback",
         "provider_secondary": "none",
         "reconciliation": {"passed": None, "max_diff_pct": None},
-        "freshness_seconds": "unknown -> NEXT ACTION: Run API Doctor",
+        "freshness_seconds": None,
+        "freshness_label": "N/A (static sample)",
         "last_bar_ts": "unknown -> NEXT ACTION: Run live monitor",
-        "next_action": "Run API Doctor",
+        "next_action": "DEMO DATA (CSV). Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor",
     }
 
 
@@ -42,18 +44,23 @@ def _last_cycle_payload() -> dict:
     last_reason = data.get("last_decision_reason", "NO_TRADE: no recent fills")
     prov = data.get("provenance", {})
     recon = prov.get("reconciliation", {})
+    data_grade = "CSV_SAMPLE" if str(prov.get("source_primary","")).startswith("csv:") else "FALLBACK_POLLING"
+    freshness = prov.get("freshness_seconds")
+    freshness_label = "N/A (static sample)" if data_grade == "CSV_SAMPLE" else (str(freshness) if freshness is not None else "unknown")
     return {
         "last_decision": {"sentence": str(last_reason)},
         "provenance": prov,
         "charts": {"equity": "artifacts/equity_curve.png", "drawdown": "artifacts/drawdown.png", "trades": "artifacts/trade_markers.png"},
-        "mode_truth": data.get("mode_truth", "SIMULATED FILLS"),
+        "mode_truth": "DEMO" if data_grade == "CSV_SAMPLE" else data.get("mode_truth", "SIMULATED FILLS"),
+        "data_grade": data_grade,
         "transport": prov.get("transport", "POLLING"),
         "provider_primary": prov.get("source_primary", "fallback"),
         "provider_secondary": prov.get("source_secondary", "none"),
         "reconciliation": recon,
-        "freshness_seconds": prov.get("freshness_seconds", "not loaded (run monitor)"),
+        "freshness_seconds": freshness,
+        "freshness_label": freshness_label,
         "last_bar_ts": prov.get("end", "not loaded (run monitor)"),
-        "next_action": "Run live monitor",
+        "next_action": "DEMO DATA (CSV). Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else "Run live monitor",
     }
 
 
@@ -70,7 +77,7 @@ def _api_doctor() -> dict:
         "broker_enabled": broker.enabled(),
         "last_bar_ts": "unknown",
         "freshness_seconds": "unknown",
-        "next_action": "Run API Doctor",
+        "next_action": "DEMO DATA (CSV). Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor",
         "errors": [],
     }
 
@@ -174,7 +181,22 @@ def _wizard_run(starting_capital: float, cycles: int) -> dict:
                 'next_action': r['output'].get('next_action', 'inspect output'),
             }
 
-    return {'status': 'ok', 'mode': 'wizard', 'steps': results, 'decision_sentence': 'TRADE: wizard completed all safety/proof steps', 'next_action': 'Optional: configure Alpaca keys'}
+    summary = _last_cycle_payload()
+    proof_status = next((x['output'].get('status') for x in results if x['step']=='proof_check'), 'HALT')
+    audit_status = next((x['output'].get('status') for x in results if x['step']=='download_audit_pack'), 'error')
+    return {
+        'status': 'ok',
+        'mode': 'wizard',
+        'steps': results,
+        'decision_sentence': 'TRADE: wizard completed all safety/proof steps',
+        'data_grade': summary.get('data_grade','CSV_SAMPLE'),
+        'transport': summary.get('transport','POLLING'),
+        'last_bar_ts': summary.get('last_bar_ts','unknown'),
+        'freshness_label': summary.get('freshness_label','N/A (static sample)'),
+        'proof_status': proof_status,
+        'audit_pack_status': audit_status,
+        'next_action': summary.get('next_action','Optional: configure Alpaca keys'),
+    }
 
 def run_action(action: str, params: dict | None = None) -> dict:
     params = params or {}
