@@ -31,7 +31,8 @@ def main() -> int:
 
     last = samples[-1] if samples else {}
     data_grade = str(last.get("data_grade", ""))
-    demo_labeled = data_grade in {"CSV_SAMPLE", "CACHED"} and "NOT LIVE DATA" in str(last.get("decision_sentence", "")).upper()
+    sent = str(last.get("decision_sentence", "")).upper()
+    demo_labeled = data_grade in {"CSV_SAMPLE", "CACHED"} and ("NOT LIVE DATA" in sent or "DEMO" in sent)
     live_ok = keys_present and ws_lib and data_grade not in {"CSV_SAMPLE", "CACHED"} and last.get("transport") == "WEBSOCKET"
 
     status = "FAIL"

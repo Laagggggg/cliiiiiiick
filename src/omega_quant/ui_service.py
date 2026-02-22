@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 from pathlib import Path
 from typing import TypedDict
@@ -9,7 +10,7 @@ from typing import TypedDict
 from omega_quant.config.alpaca_config import get_alpaca_config
 from omega_quant.execution.broker.alpaca_paper import AlpacaPaperBroker
 from omega_quant.live_gates import live_gates
-from omega_quant.monitor.live_monitor import run_live_monitor
+from omega_quant.monitor.live_monitor import compute_freshness, run_live_monitor
 from omega_quant.ops.broker_paper_cycle import run_broker_paper_cycle
 from omega_quant.ops.broker_paper_daemon import run_broker_paper_daemon
 from omega_quant.ops.master_validation import master_validation
@@ -31,6 +32,8 @@ class TruthPayload(TypedDict):
     freshness_label: str
     last_bar_ts: str
     next_action: str
+    freshness_basis: str
+    live_verified: bool
     decision_sentence: str
 
 
@@ -51,8 +54,35 @@ def _truth_defaults() -> TruthPayload:
         "freshness_label": "N/A (static sample)",
         "last_bar_ts": "unknown",
         "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor",
-        "decision_sentence": "NO_TRADE: run paper or monitor first",
+        "freshness_basis": "static_sample",
+        "live_verified": False,
+        "decision_sentence": "NO_TRADE: startup state. Next: run monitor or paper cycle.",
     }
+
+
+
+def _human_sentence(status: str, sentence: str, next_action: str) -> str:
+    txt = (sentence or "").strip()
+    if not txt:
+        txt = f"{status}: no reason provided."
+    if not txt.startswith(("HALT:", "NO_TRADE:", "TRADE:", "WARN:", "SKIP:", "ok:", "OK:")):
+        txt = f"{status}: {txt}"
+    if "Next:" not in txt:
+        txt = f"{txt} Next: {next_action}."
+    return txt
+
+
+def _is_live_verified(payload: dict) -> bool:
+    keys_present = bool(payload.get("keys_present"))
+    provider_ok = str(payload.get("provider_primary", "")).upper() in {"ALPACA", "ALPACA_BARS", "ALPACA_WEBSOCKET"}
+    transport = str(payload.get("transport", "")).upper()
+    fresh = payload.get("freshness_seconds")
+    last_bar_ts = str(payload.get("last_bar_ts", "")).lower()
+    mode_truth = str(payload.get("mode_truth", ""))
+    ws_health = str(payload.get("ws_health", "")).lower()
+    recent = isinstance(fresh, int) and fresh <= 7200
+    transport_ok = (transport == "WEBSOCKET" and "connected" in ws_health) or (transport == "POLLING" and recent)
+    return keys_present and provider_ok and transport_ok and last_bar_ts not in {"", "unknown", "not loaded (run monitor)"} and mode_truth == "LIVE_MONITOR_SAFE"
 
 
 def _enforce_truth_payload(payload: dict) -> dict:
@@ -69,8 +99,9 @@ def _enforce_truth_payload(payload: dict) -> dict:
     elif out.get("data_grade") == "CACHED":
         out["mode_truth"] = out.get("mode_truth") or "SAFE_DEGRADED"
         out["freshness_label"] = out.get("freshness_label") or "cached"
-    if not str(out.get("decision_sentence", "")).strip():
-        out["decision_sentence"] = f"{out.get('status', 'HALT')}: inspect output"
+    status = str(out.get("status", "HALT")).upper()
+    out["decision_sentence"] = _human_sentence(status, str(out.get("decision_sentence", "")), str(out.get("next_action", "Run API Doctor")))
+    out["live_verified"] = _is_live_verified(out)
     return out
 
 
@@ -85,6 +116,7 @@ def _last_cycle_payload() -> dict:
     source_primary = str(prov.get("source_primary", "fallback"))
     data_grade = "CSV_SAMPLE" if source_primary.startswith("csv:") else "FALLBACK_POLLING"
     freshness = prov.get("freshness_seconds")
+    fresh_obj = compute_freshness(data_grade=data_grade, bar_ts=str(prov.get("end", "")))
     proof = verify_paper_result()
     return _enforce_truth_payload(
         {
@@ -97,8 +129,9 @@ def _last_cycle_payload() -> dict:
             "provider_primary": source_primary,
             "provider_secondary": prov.get("source_secondary", "none"),
             "reconciliation": recon,
-            "freshness_seconds": freshness,
-            "freshness_label": str(freshness) if freshness is not None else "unknown",
+            "freshness_seconds": freshness if freshness is not None else fresh_obj["freshness_seconds"],
+            "freshness_label": "N/A (static sample)" if data_grade == "CSV_SAMPLE" else fresh_obj["freshness_label"],
+            "freshness_basis": fresh_obj["freshness_basis"],
             "last_bar_ts": prov.get("end", "not loaded (run monitor)"),
             "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else "Run live monitor",
             "proof_status": "PASS" if proof.get("ok") else "FAIL",
@@ -175,6 +208,8 @@ def _api_doctor() -> dict:
         "freshness_seconds": "unknown",
         "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor",
         "errors": [],
+        "keys_present": broker.enabled(),
+        "ws_health": "connected" if broker.enabled() else "unknown",
     }
     try:
         import importlib.util
@@ -191,6 +226,27 @@ def _api_doctor() -> dict:
     out["mode"] = "BROKER ENABLED"
     return out
 
+
+
+
+def _platform_helper(action: str) -> dict:
+    is_win = platform.system().lower().startswith("win")
+    if action == "open_alpaca_keys_page":
+        if is_win:
+            subprocess.run('start "" "https://app.alpaca.markets/paper/dashboard/overview"', shell=True)
+            return {"status": "ok", "reason": "opened_browser", "next_action": "Paste keys into .env and run API Doctor"}
+        return {"status": "HALT", "reason": "non_windows_noop", "next_action": "Open https://app.alpaca.markets/paper/dashboard/overview manually"}
+    if action == "open_env_notepad":
+        if is_win:
+            subprocess.run('notepad .env', shell=True)
+            return {"status": "ok", "reason": "opened_notepad", "next_action": "Fill .env then run API Doctor"}
+        return {"status": "HALT", "reason": "non_windows_noop", "next_action": "Edit .env with your editor"}
+    if action == "copy_env_example":
+        if Path('.env').exists():
+            return {"status": "ok", "reason": "env_exists", "next_action": "Edit .env and run API Doctor"}
+        Path('.env').write_text(Path('.env.example').read_text(encoding='utf-8'), encoding='utf-8')
+        return {"status": "ok", "reason": "env_copied", "next_action": "Fill .env keys and run API Doctor"}
+    return {"status": "error", "reason": "unknown_helper_action", "next_action": "Use supported helper actions"}
 
 def _paper_decision_sentence(cycle: dict) -> str:
     res = cycle.get("result", {})
@@ -307,6 +363,8 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return _alpaca_setup_payload()
     if action == "live_readiness":
         return _live_readiness_payload()
+    if action in {"open_alpaca_keys_page", "open_env_notepad", "copy_env_example"}:
+        return _enforce_truth_payload(_platform_helper(action))
     if action == "dry_run":
         return _enforce_truth_payload({"status": "ok", "mode": "dry_run", "message": "Dry run ready.", "decision_sentence": "NO_TRADE: dry run"})
     if action == "live_check":

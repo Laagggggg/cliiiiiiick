@@ -197,3 +197,30 @@ def test_provider_cache_fallback(monkeypatch, tmp_path):
     assert out["data_grade"] == "CACHED"
     assert out["mode_truth"] == "SAFE_DEGRADED"
     assert "cached bars" in out["decision_sentence"]
+
+
+def test_broker_recon_warn_with_open_orders(monkeypatch):
+    class DummyBroker:
+        def enabled(self): return True
+        def list_positions(self): return [{"symbol":"SPY","qty":"2"}]
+        def list_orders(self, status="open", limit=50): return [{"id":"o1"}]
+        def get_order_by_client_id(self, coid): return None
+        def place_market_order(self, *a, **k): return {"id":"x"}
+        def get_order(self, oid): return {"id":oid}
+
+    class DummyProvider:
+        def get_bars(self, symbol, timeframe, limit=120):
+            return [type("B", (), {"timestamp":"2026-01-01T00:00:00Z","open":100.0,"high":101.0,"low":99.0,"close":100.0,"volume":1}) for _ in range(limit)]
+
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.get_open_position", lambda *a, **k: None)
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.get_account_summary", lambda *a, **k: {"equity": 5000, "cash": 5000})
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.append_equity_point", lambda *a, **k: None)
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.get_checkpoint", lambda *a, **k: None)
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.set_checkpoint", lambda *a, **k: None)
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.append_order_event", lambda *a, **k: None)
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.append_recon_snapshot", lambda *a, **k: None)
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.export_recon_jsonl", lambda *a, **k: None)
+    monkeypatch.setattr("omega_quant.ops.broker_paper_daemon.run_step", lambda *a, **k: {"status": "NO_TRADE", "reason": "x"})
+    out = daemon._step_once(DummyBroker(), DummyProvider())
+    assert out["reconciliation"]["status"] == "WARN"
+

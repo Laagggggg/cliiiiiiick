@@ -21,8 +21,8 @@ def main() -> int:
         out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         return 0 if ok else 1
 
-    r1 = run_action("broker_paper_daemon", {"seconds": 5, "interval": 1})
-    r2 = run_action("broker_paper_daemon", {"seconds": 5, "interval": 1})
+    r1 = run_action("broker_paper_daemon", {"seconds": 60, "interval": 5})
+    r2 = run_action("broker_paper_daemon", {"seconds": 60, "interval": 5})
     c1 = int(r1.get("cycle", {}).get("placed", 0) or 0)
     c2 = int(r2.get("cycle", {}).get("placed", 0) or 0)
     ok = c2 <= c1

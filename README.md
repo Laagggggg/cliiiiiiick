@@ -282,3 +282,21 @@ python scripts/ui_truth_contract_acceptance.py
 ```
 
 If Alpaca credentials are missing, live checks are **UNVERIFIED (missing external creds)** and must be validated with mock tests (`pytest -q`) or by setting real keys in `.env`.
+
+
+### Live Verified Badge Rules
+`LIVE VERIFIED ✅` appears only when all are true:
+- Alpaca keys present
+- provider is real (`ALPACA_BARS`/`ALPACA_WEBSOCKET`)
+- websocket connected **or** polling freshness is within threshold
+- `last_bar_ts` known/recent
+- mode is `LIVE_MONITOR_SAFE`
+
+Otherwise UI shows `NOT LIVE ❌` with explicit `next_action`.
+
+### UI Beginner Setup Buttons
+- Open Alpaca Keys Page
+- Open .env in Notepad
+- Copy .env.example -> .env
+
+On non-Windows, these return explicit no-op guidance.

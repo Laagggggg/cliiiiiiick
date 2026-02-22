@@ -13,6 +13,8 @@ REQUIRED = [
     "last_bar_ts",
     "next_action",
     "decision_sentence",
+    "freshness_basis",
+    "live_verified",
 ]
 
 
@@ -40,3 +42,10 @@ def test_fill_model_present_and_confidence_labels(tmp_path, monkeypatch):
     out = run_action("paper_account")
     assert out["fill_model"] == "SIM_OHLC_LIMIT"
     assert "(n=" in out["account"]["win_rate_label"]
+
+
+def test_decision_sentence_has_status_and_next(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    out = run_action("reset_paper", {"starting_capital": 1000})
+    assert "Next:" in out["decision_sentence"]
+    assert any(out["decision_sentence"].startswith(x) for x in ["HALT:", "NO_TRADE:", "TRADE:", "WARN:", "OK:", "ok:"])

@@ -77,6 +77,8 @@ def test_ui_truth_payload_present(tmp_path, monkeypatch):
     assert "provider_primary" in out
     assert "provider_secondary" in out
     assert "reconciliation" in out
+    assert "live_verified" in out
+    assert "freshness_basis" in out
 
 
 def test_replay_live_stream_action(tmp_path, monkeypatch):
