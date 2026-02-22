@@ -153,8 +153,14 @@ def run_paper_cycle(starting_capital: float = 5000.0, cycles: int = 1) -> dict:
             fill = _fill_entry(limit_price, bar, market_order=False, slip=slip)
             if fill is None:
                 continue
-            fee = abs(fill * fill_qty * 0.0005)
-            open_position(bar["timestamp"], "SPY", fill_qty, fill, fee, DB_PATH)
+            # partial fill simulation (2 slices) with incremental equity updates
+            slices = [fill_qty * 0.5, fill_qty - (fill_qty * 0.5)]
+            for part in slices:
+                if part <= 0:
+                    continue
+                fee = abs(fill * part * 0.0005)
+                open_position(bar["timestamp"], "SPY", part, fill, fee, DB_PATH)
+                append_equity_point(bar["timestamp"], float(bar["close"]), DB_PATH)
             hold_bars = 0
 
         elif decision["status"] == "EXIT" and pos:
@@ -226,7 +232,8 @@ def run_paper_cycle(starting_capital: float = 5000.0, cycles: int = 1) -> dict:
 
     eq_vals = [x["equity"] for x in eq][-500:]
     dd_vals = [x["drawdown"] for x in eq][-500:]
-    marker_idx = list(range(max(0, len(eq_vals) - len(session_trades)), len(eq_vals)))
+    ts_to_idx = {r["ts"]: i for i, r in enumerate(eq[-500:])}
+    marker_idx = [ts_to_idx.get(t["timestamp"], max(0, len(eq_vals) - 1)) for t in session_trades]
     _png(ARTIFACTS / "equity_curve.png", eq_vals, marker_idx)
     _png(ARTIFACTS / "drawdown.png", dd_vals, marker_idx)
     _png(ARTIFACTS / "trade_markers.png", eq_vals, marker_idx)

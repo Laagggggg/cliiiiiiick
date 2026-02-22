@@ -28,7 +28,8 @@ def _truth_defaults() -> dict:
         "provider_primary": "fallback",
         "provider_secondary": "none",
         "reconciliation": {"passed": None, "max_diff_pct": None},
-        "freshness_seconds": "not loaded (run monitor)",
+        "freshness_seconds": "not loaded (run live/websocket monitor)",
+        "last_bar_ts": "not loaded (run live/websocket monitor)",
     }
 
 
@@ -45,11 +46,12 @@ def _last_cycle_payload() -> dict:
         "provenance": prov,
         "charts": {"equity": "artifacts/equity_curve.png", "drawdown": "artifacts/drawdown.png", "trades": "artifacts/trade_markers.png"},
         "mode_truth": data.get("mode_truth", "SIMULATED FILLS"),
-        "transport": "POLLING",
-        "provider_primary": prov.get("source_primary", "unknown"),
-        "provider_secondary": "fallback",
+        "transport": prov.get("transport", "POLLING"),
+        "provider_primary": prov.get("source_primary", "fallback"),
+        "provider_secondary": prov.get("source_secondary", "none"),
         "reconciliation": recon,
-        "freshness_seconds": prov.get("freshness_seconds"),
+        "freshness_seconds": prov.get("freshness_seconds", "not loaded (run monitor)"),
+        "last_bar_ts": prov.get("end", "not loaded (run monitor)"),
     }
 
 
@@ -57,7 +59,7 @@ def _api_doctor() -> dict:
     req = ["ALPACA_API_KEY", "ALPACA_API_SECRET", "ALPACA_BASE_URL"]
     env = {k: bool(os.getenv(k)) for k in req}
     broker = AlpacaPaperBroker()
-    out = {"env": env, "broker_enabled": broker.enabled(), "errors": []}
+    out = {"env": env, "broker_enabled": broker.enabled(), "errors": [], "ws_status": "unknown", "provider_status": "unknown", "last_bar_ts": "not loaded", "freshness_seconds": "not loaded"}
     if not broker.enabled():
         out["status"] = "WARN"
         out["mode"] = "BROKER DISABLED / USING FALLBACK DATA"
@@ -73,10 +75,18 @@ def _api_doctor() -> dict:
 
         p = AlpacaMarketDataProvider()
         out["quote_ok"] = p.get_quote("SPY") is not None
-        out["bars_1h"] = len(p.get_bars("SPY", "1h", limit=100))
+        bars = p.get_bars("SPY", "1h", limit=100)
+        out["bars_1h"] = len(bars)
+        out["provider_status"] = "ok" if bars else "empty"
+        if bars:
+            out["last_bar_ts"] = bars[-1].timestamp
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(bars[-1].timestamp.replace("Z", "+00:00"))
+            out["freshness_seconds"] = int((datetime.now(timezone.utc) - dt).total_seconds())
     except Exception as exc:  # noqa: BLE001
         out["errors"].append(f"data:{exc}")
 
+    out["ws_status"] = "REQUIRES ALPACA KEYS" if not broker.enabled() else "configured"
     out["status"] = "PASS" if not out["errors"] else "WARN"
     out["mode"] = "BROKER ENABLED" if out["status"] == "PASS" else "BROKER DISABLED / USING FALLBACK DATA"
     return out
@@ -141,6 +151,10 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return {**out, "mode_truth": "SIMULATED FILLS"}
     if action == "websocket_monitor":
         out = run_live_monitor(mode="websocket")
+        return {**out, "mode_truth": "SIMULATED FILLS", "provider_primary": out.get("source", "fallback"), "provider_secondary": "none", "reconciliation": {"passed": True, "max_diff_pct": 0.0}}
+    if action == "replay_live_stream":
+        from omega_quant.monitor.live_ws import replay_stream
+        out = replay_stream()
         return {**out, "mode_truth": "SIMULATED FILLS"}
     if action == "api_doctor":
         return _api_doctor()

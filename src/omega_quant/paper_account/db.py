@@ -73,6 +73,20 @@ def init_db(db_path: str = DB_DEFAULT) -> None:
                 k TEXT PRIMARY KEY,
                 v TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS order_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                client_order_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS recon_snapshots (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
             """
         )
 
@@ -112,6 +126,8 @@ def reset_account(starting_capital: float, db_path: str = DB_DEFAULT) -> dict[st
         conn.execute("DELETE FROM account_state WHERE account_id='paper'")
         conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('fills','trades','equity_curve')")
         conn.execute("DELETE FROM system_kv")
+        conn.execute("DELETE FROM order_events")
+        conn.execute("DELETE FROM recon_snapshots")
     return get_or_create_account(starting_capital, db_path)
 
 
@@ -243,4 +259,33 @@ def export_jsonl(path: str = "artifacts/paper_trades.jsonl", db_path: str = DB_D
     with p.open("w", encoding="utf-8") as f:
         for t in list_trades(db_path):
             f.write(json.dumps(t, sort_keys=True) + "\n")
+    return str(p)
+
+
+def append_order_event(ts: str, order_id: str, client_order_id: str, state: str, payload: dict[str, Any], db_path: str = DB_DEFAULT) -> None:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO order_events(ts,order_id,client_order_id,state,payload_json) VALUES(?,?,?,?,?)",
+            (ts, order_id, client_order_id, state, json.dumps(payload, sort_keys=True)),
+        )
+
+
+def append_recon_snapshot(ts: str, payload: dict[str, Any], db_path: str = DB_DEFAULT) -> None:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO recon_snapshots(ts,payload_json) VALUES(?,?)",
+            (ts, json.dumps(payload, sort_keys=True)),
+        )
+
+
+def export_recon_jsonl(path: str = "artifacts/recon_snapshots.jsonl", db_path: str = DB_DEFAULT) -> str:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT ts,payload_json FROM recon_snapshots ORDER BY seq").fetchall()
+    with p.open("w", encoding="utf-8") as f:
+        for ts, payload_json in rows:
+            f.write(json.dumps({"ts": ts, **json.loads(payload_json)}, sort_keys=True) + "\n")
     return str(p)

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+
+sys.path.insert(0, 'src')
+
 import argparse
 
 from omega_quant.ops.broker_paper_cycle import run_broker_paper_cycle

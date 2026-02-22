@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from omega_quant.data.providers import get_provider_chain
 from omega_quant.engine import run_step
-from omega_quant.monitor.live_ws import ensure_websocket, get_ws_state
+from omega_quant.monitor.live_ws import ensure_websocket, get_ws_state, replay_stream
 
 
 def _freshness(ts: str) -> int:
@@ -15,11 +15,18 @@ def _freshness(ts: str) -> int:
         return 999999
 
 
+def _truth_sentence(transport: str, fresh: int, last_bar_ts: str) -> str:
+    if fresh >= 7200:
+        return f"HALT: freshness_seconds={fresh} exceeds 7200 at {last_bar_ts or 'unknown_ts'}"
+    if "FAILED" in transport:
+        return f"NO_TRADE: transport={transport} using polling fallback"
+    return f"NO_TRADE: monitor healthy freshness_seconds={fresh} last_bar_ts={last_bar_ts}"
+
+
 def run_live_monitor(mode: str = "polling") -> dict:
-    ws_probe = None
     ws_state = None
     if mode == "websocket":
-        ws_probe = ensure_websocket("SPY")
+        ensure_websocket("SPY")
         ws_state = get_ws_state()
 
     errors: list[str] = []
@@ -32,6 +39,7 @@ def run_live_monitor(mode: str = "polling") -> dict:
             fresh = _freshness(rows[-1]["timestamp"])
             live_price = q.ask if q else rows[-1]["close"]
             transport = "POLLING"
+            last_bar_ts = rows[-1]["timestamp"]
 
             if ws_state:
                 if ws_state.get("connected") and ws_state.get("last_price") is not None:
@@ -39,42 +47,42 @@ def run_live_monitor(mode: str = "polling") -> dict:
                     live_price = ws_state["last_price"]
                     if ws_state.get("last_ts"):
                         fresh = _freshness(ws_state["last_ts"])
+                        last_bar_ts = ws_state.get("last_bar_ts") or ws_state["last_ts"]
                 else:
                     transport = ws_state.get("transport", "WEBSOCKET FAILED -> POLLING")
 
-            ready = "GREEN" if shadow.get("status") == "ENTER" and fresh < 1800 else ("YELLOW" if fresh < 7200 else "RED")
+            monitor_safe = fresh < 7200 or provider.source_name() != "alpaca"
+            ready = "GREEN" if shadow.get("status") == "ENTER" and monitor_safe else ("YELLOW" if monitor_safe else "RED")
 
             return {
-                "status": "ok",
+                "status": "ok" if monitor_safe else "HALT",
                 "mode": "live_monitor",
                 "transport": transport,
                 "source": provider.source_name(),
-                "latest_bar": rows[-1],
-                "live_price": live_price,
-                "spread": (q.ask - q.bid) if q else None,
+                "price": float(live_price),
                 "freshness_seconds": fresh,
-                "delayed_label": "REALTIME" if transport == "WEBSOCKET" or provider.source_name() == "alpaca" else "DELAYED/POLL",
-                "shadow_decision": {
-                    "status": shadow.get("status"),
-                    "reason": shadow.get("reason"),
-                    "score": shadow.get("score", 0.0),
-                    "threshold": shadow.get("threshold", 0.0),
-                    "regime": shadow.get("regime", "UNKNOWN"),
-                },
-                "readiness": ready,
-                "monitor_safe": True,
-                "ws_probe": ws_probe,
-                "ws_state": ws_state,
+                "last_bar_ts": last_bar_ts,
+                "shadow_decision": shadow,
+                "monitor_safe": monitor_safe,
+                "ready": ready,
+                "decision_sentence": _truth_sentence(transport, fresh, last_bar_ts),
             }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")
+
+    replay = replay_stream()
     return {
         "status": "HALT",
         "mode": "live_monitor",
-        "transport": ws_state.get("transport", "POLLING") if ws_state else "POLLING",
+        "transport": "POLLING",
+        "source": "none",
+        "price": None,
+        "freshness_seconds": 999999,
+        "last_bar_ts": replay.get("last_bar_ts", ""),
+        "shadow_decision": {"status": "NO_TRADE", "reason": "missing_live_data"},
+        "monitor_safe": False,
+        "ready": "RED",
+        "decision_sentence": "HALT: no providers available; run doctor and monitor",
         "errors": errors,
-        "readiness": "RED",
-        "monitor_safe": True,
-        "ws_probe": ws_probe,
-        "ws_state": ws_state,
+        "replay": replay,
     }

@@ -52,6 +52,7 @@ def test_broker_daemon_checkpoint_skips_duplicate_bar(monkeypatch):
     b = daemon._step_once(DummyBroker(), DummyProvider())
     assert a["status"] == "NO_TRADE"
     assert b["status"] == "SKIP"
+    assert daemon._client_order_id("SPY", "buy", "2026-01-01T00:00:00Z", 1.0) == daemon._client_order_id("SPY", "buy", "2026-01-01T00:00:00Z", 1.0)
 
 
 def test_broker_recon_mismatch_halts(monkeypatch):
@@ -77,3 +78,11 @@ def test_broker_recon_mismatch_halts(monkeypatch):
     out = daemon._step_once(DummyBroker(), DummyProvider())
     assert out["status"] == "HALT"
     assert out["reason"] == "RECON_MISMATCH"
+
+
+def test_websocket_replay_stream(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    live_ws._apply_quote({"T": "q", "bp": 101.0, "ap": 101.1, "t": "2026-01-01T01:00:00Z"})
+    out = live_ws.replay_stream()
+    assert out["status"] == "ok"
+    assert out["last_bar_ts"] == "2026-01-01T01:00:00Z"

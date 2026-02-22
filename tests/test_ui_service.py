@@ -72,3 +72,15 @@ def test_ui_truth_payload_present(tmp_path, monkeypatch):
     assert "mode_truth" in out
     assert "transport" in out
     assert "freshness_seconds" in out
+    assert "last_bar_ts" in out
+    assert "provider_primary" in out
+    assert "provider_secondary" in out
+    assert "reconciliation" in out
+
+
+def test_replay_live_stream_action(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from omega_quant.monitor.live_ws import _apply_quote
+    _apply_quote({"T": "q", "bp": 99.0, "ap": 99.1, "t": "2026-01-01T02:00:00Z"})
+    out = run_action("replay_live_stream")
+    assert out["status"] == "ok"

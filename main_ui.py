@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+
+sys.path.insert(0, 'src')
+
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 import json
@@ -11,7 +15,7 @@ HTML = """
 <style>body{font-family:Arial;margin:18px;max-width:1280px}.card{border:1px solid #ccc;border-radius:10px;padding:12px;margin-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{margin:3px;padding:8px}pre{background:#111;color:#0f0;padding:10px;border-radius:8px;overflow:auto}.danger{color:#a00}.banner{background:#222;color:#fff;padding:10px;border-radius:8px;margin-bottom:10px}</style>
 </head><body>
 <h1>OMEGA-QUANT ULTRA — Proof Terminal</h1>
-<div class='banner'>MODE_TRUTH=<b id='mode_truth'>-</b> | TRANSPORT=<b id='transport'>-</b> | PRIMARY=<b id='primary'>-</b> | SECONDARY=<b id='secondary'>-</b> | RECON=<b id='recon'>-</b> | FRESHNESS=<b id='fresh'>-</b></div>
+<div class='banner'>MODE_TRUTH=<b id='mode_truth'>-</b> | TRANSPORT=<b id='transport'>-</b> | PRIMARY=<b id='primary'>-</b> | SECONDARY=<b id='secondary'>-</b> | RECON=<b id='recon'>-</b> | FRESHNESS_SECONDS=<b id='fresh'>-</b> | LAST_BAR_TS=<b id='last_bar_ts'>-</b></div>
 <p class='danger'><b>Fail-Closed:</b> paper runs blocked when proof verification fails.</p>
 <div class='grid'>
 <div class='card'><h3>Profit Box</h3><div>Current Equity: <b id='equity'>$-</b></div><div>Initial Equity: <b id='initial'>$-</b></div><div>Session P&L: <b id='session_pnl'>-</b></div><div>Total Return %: <b id='ret'>-</b></div><div>Realized/Unrealized: <b id='ru'>-</b></div></div>
@@ -33,6 +37,7 @@ HTML = """
 <button onclick="runAction('api_doctor')">Run API Doctor</button>
 <button onclick="runAction('live_monitor')">Live Monitor (Polling)</button>
 <button onclick="runAction('websocket_monitor')">Live Monitor (Websocket)</button>
+<button onclick="runAction('replay_live_stream')">Replay Live Stream</button>
 </div>
 <div class='card'><h3>Charts</h3><a href='artifacts/equity_curve.png'>equity_curve.png</a> | <a href='artifacts/drawdown.png'>drawdown.png</a> | <a href='artifacts/trade_markers.png'>trade_markers.png</a></div>
 <div class='card'><h3>Output</h3><pre id='out'>Ready</pre></div>
@@ -44,8 +49,8 @@ async function runPaper(c1){const c=c1||document.getElementById('cycles').value;
 async function runBroker(){const c=document.getElementById('cycles').value;const p=await api(`action=broker_paper_run&steps=${encodeURIComponent(c)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
 async function runBrokerDaemon(seconds){const p=await api(`action=broker_paper_daemon&seconds=${encodeURIComponent(seconds)}&interval=5`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
 async function resetPaper(){const s=document.getElementById('starting_capital').value;const p=await api(`action=reset_paper&starting_capital=${encodeURIComponent(s)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
-function setTruth(p){document.getElementById('mode_truth').textContent=p.mode_truth||'SIMULATED FILLS';document.getElementById('transport').textContent=p.transport||'POLLING';document.getElementById('primary').textContent=p.provider_primary||((p.provenance||{}).source_primary||'unknown');document.getElementById('secondary').textContent=p.provider_secondary||'fallback';const r=(p.reconciliation||((p.provenance||{}).reconciliation)||{});document.getElementById('recon').textContent=(r.passed===undefined||r.passed===null)?'-':`${r.passed?'PASS':'FAIL'} ${r.max_diff_pct??''}`;document.getElementById('fresh').textContent=(p.freshness_seconds??(p.provenance||{}).freshness_seconds??'-');}
-function setTruthFromMonitor(p){setTruth({mode_truth:'SIMULATED FILLS',transport:p.transport,provider_primary:p.source,provider_secondary:'fallback',reconciliation:{passed:true,max_diff_pct:0},freshness_seconds:p.freshness_seconds});}
+function setTruth(p){const prov=(p.provenance||{});document.getElementById('mode_truth').textContent=p.mode_truth||'SIMULATED FILLS';document.getElementById('transport').textContent=p.transport||'POLLING (run websocket monitor)';document.getElementById('primary').textContent=p.provider_primary||(prov.source_primary||'fallback (run monitor)');document.getElementById('secondary').textContent=p.provider_secondary||(prov.source_secondary||'none');const r=(p.reconciliation||(prov.reconciliation)||{});document.getElementById('recon').textContent=(r.passed===undefined||r.passed===null)?'unknown (run broker daemon)':`${r.passed?'PASS':'FAIL'} max_diff_pct=${r.max_diff_pct??'n/a'}`;document.getElementById('fresh').textContent=(p.freshness_seconds??prov.freshness_seconds??'not loaded (run monitor)');document.getElementById('last_bar_ts').textContent=(p.last_bar_ts??prov.end??'not loaded (run monitor)');}
+function setTruthFromMonitor(p){setTruth({mode_truth:'SIMULATED FILLS',transport:p.transport,provider_primary:p.source,provider_secondary:'none',reconciliation:{passed:true,max_diff_pct:0},freshness_seconds:p.freshness_seconds,last_bar_ts:p.last_bar_ts});}
 async function refresh(){const p=await api('action=paper_account');const a=p.account||{};setTruth(p);document.getElementById('equity').textContent=`$${fmt(a.equity)}`;document.getElementById('initial').textContent=`$${fmt(a.initial_equity)}`;document.getElementById('session_pnl').textContent=fmt((a.equity||0)-(a.initial_equity||0));document.getElementById('ret').textContent=`${fmt(a.return_pct)}%`;document.getElementById('ru').textContent=`${fmt(a.realized_pnl)} / ${fmt(a.unrealized_pnl)}`;document.getElementById('trades').textContent=a.trade_count??0;document.getElementById('win').textContent=`${fmt(a.win_rate_pct)}%`;document.getElementById('awl').textContent=`${fmt(a.avg_win)} / ${fmt(a.avg_loss)}`;document.getElementById('exp').textContent=fmt(a.expectancy);document.getElementById('pf').textContent=fmt(a.profit_factor);document.getElementById('decision').textContent=JSON.stringify(p.last_decision||{});document.getElementById('prov').textContent=JSON.stringify(p.provenance||{});}refresh();
 </script></body></html>
 """

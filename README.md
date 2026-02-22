@@ -182,3 +182,22 @@ $env:PYTHONPATH = "src"
 python main_broker_paper.py --daemon --seconds 30 --interval 5
 python main_broker_paper.py --steps 2
 ```
+
+## Beginner Path (Fail-Closed)
+
+1. `python -m pip install -e .[dev]`
+2. `python main_doctor.py` (writes `artifacts/doctor_report.json`)
+3. `python main_ui.py` then open `http://localhost:8080`
+4. Click in order:
+   - **Reset Paper Account**
+   - **Historical Sim Run (1)**
+   - **Live Monitor (Polling)** or **Live Monitor (Websocket)**
+   - **Replay Live Stream** (uses `artifacts/live_stream.jsonl`)
+
+Decision meanings:
+- `NO_TRADE`: guards/strategy did not permit entry.
+- `TRADE`: entry and/or exit completed with fills.
+- `NO_FILL`: signal existed but no eligible fill.
+- `HALT`: fail-closed stop (recon mismatch, stale data, proof failure, or missing keys).
+
+If broker keys are missing, broker features are labeled **REQUIRES ALPACA KEYS**.

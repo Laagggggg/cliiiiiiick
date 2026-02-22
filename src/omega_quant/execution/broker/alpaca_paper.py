@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -12,6 +13,7 @@ class AlpacaPaperBroker:
         self.key = os.getenv("ALPACA_API_KEY", "")
         self.secret = os.getenv("ALPACA_API_SECRET", "")
         self.base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        self._last_call_ts = 0.0
 
     def enabled(self) -> bool:
         return bool(self.key and self.secret)
@@ -29,13 +31,23 @@ class AlpacaPaperBroker:
         q = f"?{urlencode(query)}" if query else ""
         url = f"{self.base}{path}{q}"
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
-        req = Request(url, data=data, headers=self._headers(), method=method)
-        try:
-            with urlopen(req, timeout=20) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"alpaca broker error {exc.code}: {body}") from exc
+        for attempt in range(4):
+            now = time.time()
+            if now - self._last_call_ts < 0.2:
+                time.sleep(0.2 - (now - self._last_call_ts))
+            self._last_call_ts = time.time()
+            req = Request(url, data=data, headers=self._headers(), method=method)
+            try:
+                with urlopen(req, timeout=20) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="ignore")
+                if exc.code == 429 and attempt < 3:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"alpaca broker error {exc.code}: {body}") from exc
+
+        raise RuntimeError("alpaca broker error: retries_exhausted")
 
     def get_account(self) -> dict:
         return self._request("GET", "/v2/account")  # type: ignore[return-value]
