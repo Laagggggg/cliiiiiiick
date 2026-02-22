@@ -129,7 +129,7 @@ def _ingest_raw(msg: dict[str, Any]) -> None:
     _journal_row(event)
 
 
-async def _run_ws(symbol: str) -> None:
+async def _run_ws(symbol: str, max_messages: int | None = None) -> None:
     import websockets  # type: ignore
 
     key = os.getenv("ALPACA_API_KEY", "")
@@ -143,6 +143,7 @@ async def _run_ws(symbol: str) -> None:
         return
 
     backoff_s = 1
+    seen = 0
     while True:
         try:
             _set_status(reconnecting=True, transport="WEBSOCKET", error="")
@@ -164,6 +165,9 @@ async def _run_ws(symbol: str) -> None:
                     for msg in items:
                         if isinstance(msg, dict):
                             _ingest_raw(msg)
+                            seen += 1
+                            if max_messages is not None and seen >= max_messages:
+                                return
 
         except Exception as exc:  # noqa: BLE001
             reason = f"WEBSOCKET FAILED -> POLLING ({exc})"

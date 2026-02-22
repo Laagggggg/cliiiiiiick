@@ -109,3 +109,51 @@ def test_websocket_journal_schema_fields(tmp_path, monkeypatch):
     assert row["schema"] == "alpaca.marketdata.v2"
     assert row["kind"] == "quote"
     assert row["event_ts"] == "2026-01-01T00:00:00Z"
+
+
+def test_websocket_mock_server_frames(tmp_path, monkeypatch):
+    import asyncio
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+
+    class FakeWS:
+        async def send(self, _msg):
+            return None
+
+        def __aiter__(self):
+            payloads = [
+                json.dumps([{"T": "q", "S": "SPY", "bp": 100.0, "ap": 100.2, "t": "2026-01-01T00:00:00Z"}]),
+                json.dumps([{"T": "t", "S": "SPY", "p": 100.3, "s": 10, "t": "2026-01-01T00:00:05Z"}]),
+                json.dumps([{"T": "b", "S": "SPY", "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.5, "v": 1000, "t": "2026-01-01T01:00:00Z"}]),
+            ]
+
+            async def gen():
+                for row in payloads:
+                    yield row
+
+            return gen()
+
+    class FakeConn:
+        async def __aenter__(self):
+            return FakeWS()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeWebsockets:
+        @staticmethod
+        def connect(*_a, **_k):
+            return FakeConn()
+
+    import sys
+
+    sys.modules["websockets"] = FakeWebsockets
+    asyncio.run(live_ws._run_ws("SPY", max_messages=3))
+
+    st = live_ws.get_ws_state()
+    assert st["last_quote_ts"] == "2026-01-01T00:00:00Z"
+    assert st["last_trade_ts"] == "2026-01-01T00:00:05Z"
+    assert st["last_bar_ts"] == "2026-01-01T01:00:00Z"

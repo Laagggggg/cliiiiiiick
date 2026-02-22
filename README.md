@@ -117,6 +117,7 @@ python main_ui.py
 
 ```powershell
 $env:PYTHONPATH = "src"
+python -m compileall src
 python main_paper.py --capital 5000 --cycles 2
 python -c "from omega_quant.ops.proof_check import verify_paper_result; print(verify_paper_result())"
 python scripts/make_audit_pack.py
@@ -201,3 +202,13 @@ Decision meanings:
 - `HALT`: fail-closed stop (recon mismatch, stale data, proof failure, or missing keys).
 
 If broker keys are missing, broker features are labeled **REQUIRES ALPACA KEYS**.
+
+
+## One-click PowerShell launcher
+
+Use `RUN_ME.ps1` for safest first run. It verifies `pyproject.toml`, creates/activates `.venv`, installs deps, sets `PYTHONPATH`, runs doctor, and starts UI.
+
+```powershell
+cd C:\path\to\cliiiiiiick
+.\RUN_ME.ps1
+```
