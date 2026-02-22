@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from omega_quant.data.providers import get_provider_chain
 from omega_quant.engine import run_step
 from omega_quant.monitor.live_ws import ensure_websocket, get_ws_state, replay_stream
+
+
+CACHE_DIR = Path("artifacts")
 
 
 def _freshness(ts: str) -> int:
@@ -15,9 +20,27 @@ def _freshness(ts: str) -> int:
         return 999999
 
 
+def _cache_path(symbol: str, timeframe: str) -> Path:
+    return CACHE_DIR / f"cache_{symbol}_{timeframe}.json"
+
+
+def _write_cache(symbol: str, timeframe: str, rows: list[dict], source: str) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _cache_path(symbol, timeframe).write_text(json.dumps({"symbol": symbol, "timeframe": timeframe, "source": source, "rows": rows}, indent=2), encoding="utf-8")
+
+
+def _read_cache(symbol: str, timeframe: str) -> dict | None:
+    p = _cache_path(symbol, timeframe)
+    if not p.exists():
+        return None
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
 def _mode_truth(healthy: bool, fallback: bool, data_grade: str) -> str:
     if data_grade == "CSV_SAMPLE":
         return "DEMO"
+    if data_grade == "CACHED":
+        return "SAFE_DEGRADED"
     if healthy:
         return "LIVE_MONITOR_SAFE"
     if fallback:
@@ -38,10 +61,10 @@ def run_live_monitor(mode: str = "polling") -> dict:
             rows = [{"timestamp": b.timestamp, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
             if not rows:
                 raise RuntimeError("no_bars")
+            _write_cache("SPY", "1h", rows, provider.source_name())
 
             q = provider.get_quote("SPY")
             shadow = run_step(rows, rows[-20:] if len(rows) >= 20 else rows, equity=5000.0, has_position=False)
-
             transport = "POLLING"
             source_primary = provider.source_name()
             data_grade = "CSV_SAMPLE" if source_primary.startswith("csv:") else "FALLBACK_POLLING"
@@ -65,23 +88,20 @@ def run_live_monitor(mode: str = "polling") -> dict:
 
             healthy = fresh < 7200 and transport == "WEBSOCKET" and data_grade != "CSV_SAMPLE"
             fallback = not healthy and transport != "WEBSOCKET"
-            monitor_safe = healthy
             status = "ok" if (healthy or fallback) else "HALT"
-            mode_truth = _mode_truth(healthy, fallback, data_grade)
-
             if data_grade == "CSV_SAMPLE":
-                decision_sentence = "NO_TRADE: DEMO CSV sample data loaded; set Alpaca keys for live monitoring"
+                sentence = "NO_TRADE: NOT LIVE DATA (CSV sample); set Alpaca keys"
             elif status == "HALT":
-                decision_sentence = f"HALT: freshness_seconds={fresh} or unavailable websocket; run API Doctor"
+                sentence = f"HALT: freshness_seconds={fresh} or unavailable websocket"
             elif fallback:
-                decision_sentence = f"NO_TRADE: {fallback_reason or 'fallback polling active'}"
+                sentence = f"NO_TRADE: {fallback_reason or 'fallback polling active'}"
             else:
-                decision_sentence = f"NO_TRADE: live websocket healthy freshness_seconds={fresh}"
+                sentence = f"NO_TRADE: live websocket healthy freshness_seconds={fresh}"
 
             return {
                 "status": status,
                 "mode": "live_monitor",
-                "mode_truth": mode_truth,
+                "mode_truth": _mode_truth(healthy, fallback, data_grade),
                 "data_grade": data_grade,
                 "transport": transport,
                 "source": source_primary,
@@ -91,14 +111,40 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 "freshness_label": "N/A (static sample)" if data_grade == "CSV_SAMPLE" else str(fresh),
                 "last_bar_ts": last_bar_ts,
                 "shadow_decision": shadow,
-                "monitor_safe": monitor_safe,
+                "monitor_safe": healthy,
                 "ready": "GREEN" if healthy and shadow.get("status") == "ENTER" else ("YELLOW" if fallback else "RED"),
-                "decision_sentence": decision_sentence,
+                "decision_sentence": sentence,
                 "reconciliation": {"passed": True if healthy else None, "max_diff_pct": 0.0 if healthy else None},
                 "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else ("Run websocket monitor with Alpaca keys" if fallback else "None"),
             }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")
+
+    cache = _read_cache("SPY", "1h")
+    if cache and cache.get("rows"):
+        rows = cache["rows"]
+        last_bar_ts = rows[-1]["timestamp"]
+        fresh = _freshness(last_bar_ts)
+        return {
+            "status": "HALT",
+            "mode": "live_monitor",
+            "mode_truth": "SAFE_DEGRADED",
+            "data_grade": "CACHED",
+            "transport": "POLLING",
+            "source": f"cache:{_cache_path('SPY', '1h')}",
+            "source_secondary": "none",
+            "price": float(rows[-1]["close"]),
+            "freshness_seconds": fresh,
+            "freshness_label": str(fresh),
+            "last_bar_ts": last_bar_ts,
+            "shadow_decision": {"status": "NO_TRADE", "reason": "cached_data_only"},
+            "monitor_safe": False,
+            "ready": "RED",
+            "decision_sentence": "HALT: providers failed; using cached bars only",
+            "errors": errors,
+            "reconciliation": {"passed": None, "max_diff_pct": None},
+            "next_action": "Restore providers/websocket and rerun API Doctor",
+        }
 
     replay = replay_stream()
     return {
@@ -116,7 +162,7 @@ def run_live_monitor(mode: str = "polling") -> dict:
         "shadow_decision": {"status": "NO_TRADE", "reason": "missing_live_data"},
         "monitor_safe": False,
         "ready": "RED",
-        "decision_sentence": "HALT: no providers available; Run API Doctor",
+        "decision_sentence": "HALT: no providers available",
         "errors": errors,
         "replay": replay,
         "reconciliation": {"passed": None, "max_diff_pct": None},

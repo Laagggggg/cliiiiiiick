@@ -157,3 +157,43 @@ def test_websocket_mock_server_frames(tmp_path, monkeypatch):
     assert st["last_quote_ts"] == "2026-01-01T00:00:00Z"
     assert st["last_trade_ts"] == "2026-01-01T00:00:05Z"
     assert st["last_bar_ts"] == "2026-01-01T01:00:00Z"
+
+
+def test_normalize_event_schema_fields():
+    ev = live_ws._normalize_event({"T": "b", "S": "SPY", "o": 100, "h": 101, "l": 99, "c": 100.5, "v": 12, "t": "2026-01-01T01:00:00Z"})
+    assert ev is not None
+    assert ev["schema"] == "alpaca.marketdata.v2"
+    assert ev["kind"] == "bar"
+    assert ev["symbol"] == "SPY"
+    assert ev["price"] == 100.5
+
+
+def test_provider_cache_fallback(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    class BadProvider:
+        def source_name(self):
+            return "bad"
+
+        def get_bars(self, *_a, **_k):
+            raise RuntimeError("down")
+
+    class GoodProvider:
+        def source_name(self):
+            return "stooq_daily"
+
+        def get_bars(self, *_a, **_k):
+            return [type("B", (), {"timestamp": "2026-01-01T00:00:00Z", "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1})]
+
+        def get_quote(self, *_a, **_k):
+            return type("Q", (), {"ask": 100.5})
+
+    monkeypatch.setattr("omega_quant.monitor.live_monitor.get_provider_chain", lambda: [GoodProvider()])
+    out_ok = run_live_monitor(mode="polling")
+    assert out_ok["status"] in {"ok", "HALT"}
+
+    monkeypatch.setattr("omega_quant.monitor.live_monitor.get_provider_chain", lambda: [BadProvider()])
+    out = run_live_monitor(mode="polling")
+    assert out["data_grade"] == "CACHED"
+    assert out["mode_truth"] == "SAFE_DEGRADED"
+    assert "cached bars" in out["decision_sentence"]

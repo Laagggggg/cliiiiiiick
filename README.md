@@ -212,3 +212,40 @@ Use `RUN_ME.ps1` for safest first run. It verifies `pyproject.toml`, creates/act
 cd C:\path\to\cliiiiiiick
 .\RUN_ME.ps1
 ```
+
+
+## Canonical Launcher (PowerShell)
+
+Use **only** `RUN_ME.ps1` from repo root:
+
+```powershell
+cd <repo_root>
+.\RUN_ME.ps1
+```
+
+`RUN_ME.ps1` performs fail-closed checks in this exact order:
+1. verify `pyproject.toml` exists in current directory
+2. create and activate `.venv`
+3. install dependencies with `python -m pip install -e .[dev]`
+4. set `$env:PYTHONPATH = "src"`
+5. run `python -m compileall -q .`
+6. run `pytest -q`
+7. run `python main_doctor.py`
+8. launch `python main_ui.py`
+
+If any step fails, it prints `HALT:` and `NEXT_ACTION:` and stops.
+
+### Alpaca environment setup (PowerShell)
+
+```powershell
+$env:ALPACA_API_KEY = "..."
+$env:ALPACA_API_SECRET = "..."
+$env:ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+python main_doctor.py
+```
+
+### Live monitor acceptance command
+
+```powershell
+python scripts/live_monitor_acceptance.py --seconds 60
+```
