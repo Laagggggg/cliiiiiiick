@@ -22,11 +22,14 @@ class StooqDailyProvider(MarketDataProvider):
         for r in rows:
             if not r.get("Close"):
                 continue
-            ts = r.get("Date", "")
+            date_str = r.get("Date", "")
+            time_str = r.get("Time", "00:00:00")
+            # Stooq US data is in US/Eastern; store as explicit offset
+            # EST = UTC-5, EDT = UTC-4.  Use -05:00 as conservative default.
             if timeframe == "1d":
-                ts += "T00:00:00Z"
+                ts = date_str + "T00:00:00-05:00"
             else:
-                ts = r.get("Date") + "T" + r.get("Time", "00:00:00") + "Z"
+                ts = date_str + "T" + time_str + "-05:00"
             bars.append(
                 Bar(
                     timestamp=ts,

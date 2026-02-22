@@ -22,6 +22,11 @@ def run_pipeline_step(
     hurst_value: float,
     htf_bias: str,
     broker: PaperBroker,
+    *,
+    guard_checks: dict[str, bool] | None = None,
+    expectancy: float = 0.1,
+    consecutive_losses: int = 0,
+    portfolio_heat: float = 0.01,
 ) -> dict:
     data_check = validate_ohlcv(rows)
     if not data_check["passed"]:
@@ -31,8 +36,15 @@ def run_pipeline_step(
     if not rec["passed"]:
         return {"status": "HALT", "reason": "reconciliation_failed", "details": rec}
 
-    checks = {k: True for k in REQUIRED_GUARDS}
-    guard = guard_all_v5(State(checks=checks, expectancy=0.1, consecutive_losses=0, portfolio_heat=0.01))
+    # Use real guard state; default to fail-closed (all False) if not provided
+    if guard_checks is not None:
+        checks = {k: guard_checks.get(k, False) for k in REQUIRED_GUARDS}
+    else:
+        checks = {k: False for k in REQUIRED_GUARDS}
+    # Data guards are satisfied by the checks above
+    checks["data_quality"] = data_check["passed"]
+    checks["data_reconciliation"] = rec["passed"]
+    guard = guard_all_v5(State(checks=checks, expectancy=expectancy, consecutive_losses=consecutive_losses, portfolio_heat=portfolio_heat))
     if not guard.passed:
         return {"status": "HALT", "reason": f"guard_failed:{guard.failed_guard}"}
 

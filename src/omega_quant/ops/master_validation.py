@@ -17,12 +17,24 @@ def master_validation(
     risk_ack: str = "",
     paper_days: int = 0,
     micro_live_days: int = 0,
+    guard_checks: dict[str, bool] | None = None,
+    consecutive_losses: int = 0,
+    portfolio_heat: float = 0.01,
 ) -> dict:
     health = system_health()
 
-    checks = {k: True for k in REQUIRED_GUARDS}
+    # Accept real guard state when provided; default to fail-closed (False)
+    if guard_checks is not None:
+        checks = {k: guard_checks.get(k, False) for k in REQUIRED_GUARDS}
+    else:
+        checks = {k: False for k in REQUIRED_GUARDS}
     checks["system_resources"] = health["passed"]
-    guard = guard_all_v5(State(checks=checks, expectancy=metrics.get("expectancy", 0.0), consecutive_losses=0, portfolio_heat=0.01))
+    guard = guard_all_v5(State(
+        checks=checks,
+        expectancy=metrics.get("expectancy", 0.0),
+        consecutive_losses=consecutive_losses,
+        portfolio_heat=portfolio_heat,
+    ))
 
     research = go_no_go_checklist(metrics)
     drift = drift_gate(expected_features, actual_features)

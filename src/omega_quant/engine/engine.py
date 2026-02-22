@@ -4,6 +4,7 @@ import math
 
 
 def _hurst_like(prices: list[float]) -> float:
+    """Lightweight Hurst proxy for the engine (fast path)."""
     if len(prices) < 20:
         return 0.5
     diffs = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
@@ -26,6 +27,20 @@ def _autocorr(vals: list[float], lag: int) -> float:
     return num / (math.sqrt(denx * deny) + 1e-9)
 
 
+def _atr(rows: list[dict], period: int = 14) -> float:
+    """Average True Range over the last `period` bars."""
+    if len(rows) < period + 1:
+        return 0.0
+    trs: list[float] = []
+    for i in range(-period, 0):
+        h = float(rows[i]["high"])
+        lo = float(rows[i]["low"])
+        prev_c = float(rows[i - 1]["close"])
+        tr = max(h - lo, abs(h - prev_c), abs(lo - prev_c))
+        trs.append(tr)
+    return sum(trs) / len(trs) if trs else 0.0
+
+
 def run_step(rows_1h: list[dict], rows_1d: list[dict] | None, equity: float, has_position: bool = False, entry_price: float | None = None, hold_bars: int = 0) -> dict:
     if len(rows_1h) < 40:
         return {"status": "HALT", "reason": "stale_or_short_data", "score": 0.0, "threshold": 1.0, "regime": "AVOID", "guards": {"stale_data": False}}
@@ -36,6 +51,9 @@ def run_step(rows_1h: list[dict], rows_1d: list[dict] | None, equity: float, has
 
     decision = closes[:-1]  # no-lookahead
     exec_price = closes[-1]
+    atr = _atr(rows_1h[:-1], period=14)  # ATR from decision bars only
+    if atr <= 0:
+        atr = abs(decision[-1]) * 0.005  # fallback: 0.5% of price
 
     fast = sum(decision[-8:]) / 8
     slow = sum(decision[-21:]) / 21
@@ -66,24 +84,34 @@ def run_step(rows_1h: list[dict], rows_1d: list[dict] | None, equity: float, has
     if regime == "AVOID":
         return {"status": "NO_TRADE", "reason": "Regime AVOID", "score": score, "threshold": threshold, "regime": regime, "hurst": hurst, "regime_confidence": regime_conf}
 
-    # exit logic
+    # Exit logic — ATR-based stops for proper risk/reward
     if has_position and entry_price is not None:
-        stop = entry_price * 0.992
-        take = entry_price * 1.008
+        stop_mult = 2.0   # 2x ATR stop loss
+        target_mult = 3.0  # 3x ATR take profit (1.5:1 R:R)
+        stop = entry_price - atr * stop_mult
+        take = entry_price + atr * target_mult
+
         if exec_price <= stop:
-            return {"status": "EXIT", "reason": "stop_loss", "score": score, "threshold": threshold, "regime": regime, "exit": exec_price}
+            return {"status": "EXIT", "reason": "stop_loss", "score": score, "threshold": threshold, "regime": regime, "exit": exec_price, "atr": atr}
         if exec_price >= take:
-            return {"status": "EXIT", "reason": "take_profit", "score": score, "threshold": threshold, "regime": regime, "exit": exec_price}
-        if hold_bars >= 12:
-            return {"status": "EXIT", "reason": "time_stop", "score": score, "threshold": threshold, "regime": regime, "exit": exec_price}
-        if score < threshold * 0.8:
-            return {"status": "EXIT", "reason": "signal_exit", "score": score, "threshold": threshold, "regime": regime, "exit": exec_price}
-        return {"status": "HOLD", "reason": "hold", "score": score, "threshold": threshold, "regime": regime}
+            return {"status": "EXIT", "reason": "take_profit", "score": score, "threshold": threshold, "regime": regime, "exit": exec_price, "atr": atr}
+        if hold_bars >= 20:
+            return {"status": "EXIT", "reason": "time_stop", "score": score, "threshold": threshold, "regime": regime, "exit": exec_price, "atr": atr}
+        if score < threshold * 0.7:
+            return {"status": "EXIT", "reason": "signal_exit", "score": score, "threshold": threshold, "regime": regime, "exit": exec_price, "atr": atr}
+        return {"status": "HOLD", "reason": "hold", "score": score, "threshold": threshold, "regime": regime, "atr": atr}
 
     if score < threshold:
         return {"status": "NO_TRADE", "reason": f"Score {score:.3f} < threshold {threshold:.3f}", "score": score, "threshold": threshold, "regime": regime}
 
-    qty = round((equity * 0.08) / decision[-1], 6)
+    # Position sizing: 2% risk per trade based on ATR stop
+    risk_per_trade = equity * 0.02
+    stop_distance = atr * 2.0
+    qty = round(risk_per_trade / stop_distance, 6) if stop_distance > 0 else 0.0
+    # Cap at 20% of equity
+    max_qty = (equity * 0.20) / decision[-1] if decision[-1] > 0 else 0.0
+    qty = min(qty, max_qty)
+
     return {
         "status": "ENTER",
         "reason": f"Score {score:.3f} >= threshold {threshold:.3f}",
@@ -94,4 +122,5 @@ def run_step(rows_1h: list[dict], rows_1d: list[dict] | None, equity: float, has
         "qty": max(0.0, qty),
         "hurst": hurst,
         "regime_confidence": regime_conf,
+        "atr": atr,
     }

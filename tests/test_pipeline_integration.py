@@ -1,5 +1,6 @@
 from omega_quant.execution.broker import PaperBroker
 from omega_quant.ops.pipeline import run_pipeline_step
+from omega_quant.risk.guards import REQUIRED_GUARDS
 
 
 def _rows():
@@ -11,6 +12,7 @@ def _rows():
 
 def test_pipeline_trade_path():
     broker = PaperBroker(cash=5000)
+    all_guards = {k: True for k in REQUIRED_GUARDS}
     out = run_pipeline_step(
         rows=_rows(),
         primary_prices=[100, 101],
@@ -22,6 +24,7 @@ def test_pipeline_trade_path():
         hurst_value=0.65,
         htf_bias="BULLISH",
         broker=broker,
+        guard_checks=all_guards,
     )
     assert out["status"] in {"TRADE", "NO_FILL", "NO_TRADE"}
 
