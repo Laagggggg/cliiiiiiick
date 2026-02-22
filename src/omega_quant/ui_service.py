@@ -16,7 +16,7 @@ from omega_quant.ops.broker_paper_cycle import run_broker_paper_cycle
 from omega_quant.ops.broker_paper_daemon import run_broker_paper_daemon
 from omega_quant.ops.master_validation import master_validation
 from omega_quant.ops.proof_check import verify_paper_result
-from omega_quant.paper_account.db import get_account_summary, list_trades, reset_account
+from omega_quant.paper_account.db import get_account_summary, get_paper_days_completed, list_trades, reset_account
 from omega_quant.research.checklist import render_go_no_go_markdown
 from omega_quant.research.report import render_report
 
@@ -43,7 +43,7 @@ class TruthPayload(TypedDict):
 
 
 def default_metrics() -> dict:
-    return {"wfe": 0.62, "dsr_confidence": 0.97, "pbo": 0.30, "white_rc_p": 0.03, "spa_p": 0.02, "recovery_factor": 3.4, "expectancy": 0.12}
+    return {"wfe": 0.62, "dsr_confidence": 0.97, "pbo": None, "pbo_label": "CPCV/PBO NOT IMPLEMENTED", "white_rc_p": 0.03, "spa_p": 0.02, "recovery_factor": 3.4, "expectancy": 0.12, "gt_score_label": "HEURISTIC (non-peer-reviewed)"}
 
 
 def _truth_defaults() -> TruthPayload:
@@ -215,12 +215,14 @@ def _live_readiness_payload() -> dict:
     fresh = mon.get("freshness_seconds")
     keys_ok = bool(cfg.get("api_key") and cfg.get("api_secret"))
     ws_lib = find_spec("websockets") is not None
+    paper_days = get_paper_days_completed()
     checks = {
         "keys_present": {"ok": keys_ok, "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET in .env"},
         "websockets_installed": {"ok": ws_lib, "next_action": "python -m pip install websockets"},
         "websocket_connected": {"ok": bool(ws.get("connected")), "next_action": "Run API Doctor and websocket monitor"},
         "polling_fallback_active": {"ok": "POLLING" in str(mon.get("transport", "")), "next_action": "If expected live, fix websocket/auth"},
         "last_bar_recent": {"ok": isinstance(fresh, int) and fresh < 7200, "next_action": "Check provider/data freshness"},
+        "paper_phase": {"ok": paper_days >= 45, "next_action": "Run paper until 45 unique days are completed"},
     }
     overall_ok = all(v["ok"] for v in checks.values() if v is not checks["polling_fallback_active"])
     return _enforce_truth_payload({
@@ -229,6 +231,8 @@ def _live_readiness_payload() -> dict:
         "reason": "live_ready" if overall_ok else "live_readiness_failed",
         "next_action": "Run live monitor acceptance" if overall_ok else "Review failed checklist items and fix env/connectivity",
         "readiness": checks,
+        "paper_days_completed": paper_days,
+        "paper_days_required": 45,
     })
 
 def _api_doctor() -> dict:
@@ -385,7 +389,7 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return _enforce_truth_payload({"status": out.get("status", "HALT"), "mode": "broker_paper_daemon", "fill_model": "BROKER_FILL", "cycle": out, "decision_sentence": out.get("decision_sentence") or "NO_TRADE: broker daemon completed", "account": get_account_summary(), **payload, "mode_truth": "BROKER FILLS"})
 
     if action == "paper_account":
-        return _enforce_truth_payload({"status": "ok", "account": get_account_summary(), "last_trades": list_trades()[-20:], "fill_model": "SIM_OHLC_LIMIT", **_last_cycle_payload()})
+        return _enforce_truth_payload({"status": "ok", "account": get_account_summary(), "last_trades": list_trades()[-20:], "paper_days_completed": get_paper_days_completed(), "paper_days_required": 45, "fill_model": "SIM_OHLC_LIMIT", **_last_cycle_payload()})
     if action == "reset_paper":
         return _enforce_truth_payload({"status": "ok", "account": reset_account(float(params.get("starting_capital", 5000.0))), "decision_sentence": "NO_TRADE: paper account reset"})
     if action == "proof_check":

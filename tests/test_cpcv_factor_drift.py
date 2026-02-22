@@ -3,11 +3,11 @@ from omega_quant.research.cpcv import cpcv_gate, probability_of_backtest_overfit
 from omega_quant.research.factor_decomposition import factor_decomposition
 
 
-def test_cpcv_gate_pass_and_fail_shapes():
-    pbo_good = probability_of_backtest_overfitting([1.0, 0.8, 0.4], [0.9, 0.5, 0.2])
-    pbo_bad = probability_of_backtest_overfitting([1.0, 0.8, 0.4], [0.1, 0.6, 0.7])
-    assert pbo_good < pbo_bad
-    assert cpcv_gate([1, 0.8, 0.4], [0.9, 0.5, 0.2])["gate"] == "PASS"
+def test_cpcv_not_implemented_label():
+    assert probability_of_backtest_overfitting([1.0, 0.8, 0.4], [0.9, 0.5, 0.2]) is None
+    out = cpcv_gate([1, 0.8, 0.4], [0.9, 0.5, 0.2])
+    assert out["gate"] == "NOT_IMPLEMENTED"
+    assert "NOT IMPLEMENTED" in out["label"]
 
 
 def test_factor_decomposition_keys():

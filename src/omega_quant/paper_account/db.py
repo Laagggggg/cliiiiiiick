@@ -268,6 +268,21 @@ def set_checkpoint(key: str, value: str, db_path: str = DB_DEFAULT) -> None:
             (key, value),
         )
 
+
+def register_paper_day(day_yyyy_mm_dd: str, db_path: str = DB_DEFAULT) -> int:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        conn.execute("INSERT OR IGNORE INTO system_kv(k,v) VALUES(?,?)", (f"paper_day:{day_yyyy_mm_dd}", "1"))
+        row = conn.execute("SELECT COUNT(*) FROM system_kv WHERE k LIKE 'paper_day:%'").fetchone()
+        return int(row[0]) if row else 0
+
+
+def get_paper_days_completed(db_path: str = DB_DEFAULT) -> int:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM system_kv WHERE k LIKE 'paper_day:%'").fetchone()
+        return int(row[0]) if row else 0
+
 def export_jsonl(path: str = "artifacts/paper_trades.jsonl", db_path: str = DB_DEFAULT) -> str:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)

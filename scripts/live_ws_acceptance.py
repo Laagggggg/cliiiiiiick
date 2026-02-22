@@ -16,6 +16,7 @@ from omega_quant.monitor.live_ws import ensure_websocket, get_ws_state
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--seconds", type=int, default=30)
+    p.add_argument("--freshness-threshold", type=int, default=300)
     args = p.parse_args()
 
     out = Path("artifacts/live_ws_acceptance.json")
@@ -28,7 +29,7 @@ def main() -> int:
             "status": "SKIP",
             "reason": "requires_keys_or_websockets",
             "next_action": "Set .env Alpaca keys and install websockets, then rerun.",
-            "metrics": {"keys_present": keys_present, "websockets_installed": ws_lib},
+                "metrics": {"keys_present": keys_present, "websockets_installed": ws_lib},
         }
         out.write_text(json.dumps(result, indent=2), encoding="utf-8")
         return 0
@@ -49,7 +50,8 @@ def main() -> int:
             break
         time.sleep(1)
 
-    ok = saw_q and saw_b
+    fresh = last.get("freshness_seconds")
+    ok = saw_q and saw_b and isinstance(fresh, int) and fresh <= args.freshness_threshold
     result = {
         "status": "PASS" if ok else "FAIL",
         "reason": "" if ok else "ws_missing_quote_or_bar_events",
@@ -63,6 +65,8 @@ def main() -> int:
             "last_trade_ts": last.get("last_trade_ts"),
             "last_bar_ts": last.get("last_bar_ts"),
             "connected": last.get("connected"),
+            "freshness_seconds": fresh,
+            "freshness_threshold": args.freshness_threshold,
         },
     }
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
