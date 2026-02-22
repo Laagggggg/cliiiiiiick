@@ -10,9 +10,11 @@ from typing import Any
 
 from omega_quant.config.alpaca_config import get_alpaca_config
 
-
 ARTIFACTS = Path("artifacts")
 STREAM_JOURNAL = ARTIFACTS / "live_stream.jsonl"
+JOURNAL_MAX_BYTES = 50 * 1024 * 1024
+JOURNAL_KEEP = 5
+STALL_SECONDS = 30
 
 
 @dataclass
@@ -26,6 +28,8 @@ class WSState:
     last_quote_ts: str = ""
     last_trade_ts: str = ""
     last_bar_ts: str = ""
+    last_event_kind: str = "none"
+    stall_seconds: int = 0
     updated_at: float = 0.0
 
 
@@ -34,8 +38,20 @@ _THREAD: threading.Thread | None = None
 _LOCK = threading.Lock()
 
 
+def _rotate_journal_if_needed() -> None:
+    if not STREAM_JOURNAL.exists() or STREAM_JOURNAL.stat().st_size < JOURNAL_MAX_BYTES:
+        return
+    ts = int(time.time())
+    rotated = STREAM_JOURNAL.with_name(f"live_stream_{ts}.jsonl")
+    STREAM_JOURNAL.rename(rotated)
+    files = sorted(ARTIFACTS.glob("live_stream_*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in files[JOURNAL_KEEP:]:
+        old.unlink(missing_ok=True)
+
+
 def _journal_row(row: dict[str, Any]) -> None:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    _rotate_journal_if_needed()
     with STREAM_JOURNAL.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, sort_keys=True) + "\n")
 
@@ -49,60 +65,22 @@ def _set_status(**kwargs: Any) -> None:
 def _normalize_event(msg: dict[str, Any]) -> dict[str, Any] | None:
     tpe = str(msg.get("T", "")).lower()
     recv_ts = time.time()
-
-    # Alpaca Market Data v2 event types: q=quote, t=trade, b=bar
-    # Ref: https://docs.alpaca.markets/docs/streaming-market-data
     if tpe == "q":
         bid = msg.get("bp")
         ask = msg.get("ap")
         if bid is None and ask is None:
             return None
-        return {
-            "schema": "alpaca.marketdata.v2",
-            "kind": "quote",
-            "event_ts": str(msg.get("t", "")),
-            "symbol": str(msg.get("S", "SPY")),
-            "bid": float(bid) if bid is not None else None,
-            "ask": float(ask) if ask is not None else None,
-            "price": float(ask if ask is not None else bid),
-            "recv_ts": recv_ts,
-            "raw": msg,
-        }
-
+        return {"schema": "alpaca.marketdata.v2", "kind": "quote", "event_ts": str(msg.get("t", "")), "symbol": str(msg.get("S", "SPY")), "bid": float(bid) if bid is not None else None, "ask": float(ask) if ask is not None else None, "price": float(ask if ask is not None else bid), "recv_ts": recv_ts, "raw": msg}
     if tpe == "t":
         price = msg.get("p")
         size = msg.get("s")
         if price is None:
             return None
-        return {
-            "schema": "alpaca.marketdata.v2",
-            "kind": "trade",
-            "event_ts": str(msg.get("t", "")),
-            "symbol": str(msg.get("S", "SPY")),
-            "price": float(price),
-            "size": float(size) if size is not None else None,
-            "recv_ts": recv_ts,
-            "raw": msg,
-        }
-
+        return {"schema": "alpaca.marketdata.v2", "kind": "trade", "event_ts": str(msg.get("t", "")), "symbol": str(msg.get("S", "SPY")), "price": float(price), "size": float(size) if size is not None else None, "recv_ts": recv_ts, "raw": msg}
     if tpe == "b":
         if any(msg.get(k) is None for k in ["o", "h", "l", "c", "v"]):
             return None
-        return {
-            "schema": "alpaca.marketdata.v2",
-            "kind": "bar",
-            "event_ts": str(msg.get("t", "")),
-            "symbol": str(msg.get("S", "SPY")),
-            "open": float(msg["o"]),
-            "high": float(msg["h"]),
-            "low": float(msg["l"]),
-            "close": float(msg["c"]),
-            "volume": float(msg["v"]),
-            "price": float(msg["c"]),
-            "recv_ts": recv_ts,
-            "raw": msg,
-        }
-
+        return {"schema": "alpaca.marketdata.v2", "kind": "bar", "event_ts": str(msg.get("t", "")), "symbol": str(msg.get("S", "SPY")), "open": float(msg["o"]), "high": float(msg["h"]), "low": float(msg["l"]), "close": float(msg["c"]), "volume": float(msg["v"]), "price": float(msg["c"]), "recv_ts": recv_ts, "raw": msg}
     return None
 
 
@@ -112,6 +90,8 @@ def _apply_normalized(event: dict[str, Any]) -> None:
     event_ts = str(event.get("event_ts", ""))
     with _LOCK:
         _STATE.updated_at = time.time()
+        _STATE.last_event_kind = kind
+        _STATE.stall_seconds = 0
         if price is not None:
             _STATE.last_price = float(price)
         if kind == "quote":
@@ -134,10 +114,7 @@ async def _run_ws(symbol: str, max_messages: int | None = None) -> None:
     import websockets  # type: ignore
 
     cfg = get_alpaca_config()
-    key = cfg["api_key"]
-    secret = cfg["api_secret"]
-    endpoint = cfg["ws_url"]
-
+    key, secret, endpoint = cfg["api_key"], cfg["api_secret"], cfg["ws_url"]
     if not key or not secret:
         reason = "REQUIRES ALPACA KEYS -> POLLING"
         _set_status(connected=False, failed=True, transport=reason, error=reason)
@@ -149,28 +126,48 @@ async def _run_ws(symbol: str, max_messages: int | None = None) -> None:
     while True:
         try:
             _set_status(reconnecting=True, transport="WEBSOCKET", error="")
-            # websockets keepalive guidance: ping_interval + ping_timeout to detect dead peers.
-            # Ref: https://websockets.readthedocs.io/en/stable/topics/keepalive.html
             async with websockets.connect(endpoint, ping_interval=20, ping_timeout=20) as ws:
                 await ws.send(json.dumps({"action": "auth", "key": key, "secret": secret}))
                 await ws.send(json.dumps({"action": "subscribe", "quotes": [symbol], "trades": [symbol], "bars": [symbol]}))
-                _set_status(connected=True, reconnecting=False, failed=False, error="", transport="WEBSOCKET")
+                _set_status(connected=True, reconnecting=False, failed=False, error="", transport="WEBSOCKET", stall_seconds=0)
                 _journal_row({"schema": "alpaca.marketdata.v2", "kind": "status", "event_ts": "", "state": "connected", "transport": "WEBSOCKET", "recv_ts": time.time()})
                 backoff_s = 1
-
-                async for raw in ws:
-                    try:
-                        payload = json.loads(raw)
-                    except Exception:
-                        continue
-                    items = payload if isinstance(payload, list) else [payload]
-                    for msg in items:
-                        if isinstance(msg, dict):
-                            _ingest_raw(msg)
-                            seen += 1
-                            if max_messages is not None and seen >= max_messages:
-                                return
-
+                last_msg_at = time.time()
+                if hasattr(ws, "recv"):
+                    while True:
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                            last_msg_at = time.time()
+                        except asyncio.TimeoutError:
+                            stall = int(time.time() - last_msg_at)
+                            _set_status(stall_seconds=stall)
+                            if stall >= STALL_SECONDS:
+                                raise RuntimeError(f"websocket_stall>{STALL_SECONDS}s")
+                            continue
+                        try:
+                            payload = json.loads(raw)
+                        except Exception:
+                            continue
+                        items = payload if isinstance(payload, list) else [payload]
+                        for msg in items:
+                            if isinstance(msg, dict):
+                                _ingest_raw(msg)
+                                seen += 1
+                                if max_messages is not None and seen >= max_messages:
+                                    return
+                else:
+                    async for raw in ws:
+                        try:
+                            payload = json.loads(raw)
+                        except Exception:
+                            continue
+                        items = payload if isinstance(payload, list) else [payload]
+                        for msg in items:
+                            if isinstance(msg, dict):
+                                _ingest_raw(msg)
+                                seen += 1
+                                if max_messages is not None and seen >= max_messages:
+                                    return
         except Exception as exc:  # noqa: BLE001
             reason = f"WEBSOCKET FAILED -> POLLING ({exc})"
             _set_status(connected=False, reconnecting=True, failed=True, transport=reason, error=str(exc))
@@ -189,8 +186,7 @@ def _thread_main(symbol: str) -> None:
 def ensure_websocket(symbol: str = "SPY") -> dict[str, Any]:
     global _THREAD
     cfg = get_alpaca_config()
-    key = cfg["api_key"]
-    secret = cfg["api_secret"]
+    key, secret = cfg["api_key"], cfg["api_secret"]
     if not key or not secret:
         reason = "REQUIRES ALPACA KEYS -> POLLING"
         _set_status(connected=False, reconnecting=False, failed=True, transport=reason, error=reason)
@@ -205,23 +201,8 @@ def ensure_websocket(symbol: str = "SPY") -> dict[str, Any]:
 def replay_stream(path: str = str(STREAM_JOURNAL)) -> dict[str, Any]:
     p = Path(path)
     if not p.exists():
-        return {
-            "status": "WARN",
-            "reason": "stream_journal_missing",
-            "next_action": "Run websocket monitor",
-            "events": 0,
-            "last_price": None,
-            "last_bar_ts": "",
-        }
-
-    rebuilt = {
-        "last_price": None,
-        "last_quote_ts": "",
-        "last_trade_ts": "",
-        "last_bar_ts": "",
-        "events": 0,
-    }
-
+        return {"status": "WARN", "reason": "stream_journal_missing", "next_action": "Run websocket monitor", "events": 0, "last_price": None, "last_bar_ts": ""}
+    rebuilt = {"last_price": None, "last_quote_ts": "", "last_trade_ts": "", "last_bar_ts": "", "events": 0}
     for line in p.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -236,15 +217,8 @@ def replay_stream(path: str = str(STREAM_JOURNAL)) -> dict[str, Any]:
             rebuilt["last_trade_ts"] = str(row.get("event_ts", ""))
         elif kind == "bar":
             rebuilt["last_bar_ts"] = str(row.get("event_ts", ""))
-
     if rebuilt["events"] == 0:
-        return {
-            "status": "WARN",
-            "reason": "empty_stream_journal",
-            "next_action": "Run websocket monitor",
-            **rebuilt,
-        }
-
+        return {"status": "WARN", "reason": "empty_stream_journal", "next_action": "Run websocket monitor", **rebuilt}
     return {"status": "ok", "transport": "REPLAY", **rebuilt}
 
 
@@ -260,5 +234,7 @@ def get_ws_state() -> dict[str, Any]:
             "last_quote_ts": _STATE.last_quote_ts,
             "last_trade_ts": _STATE.last_trade_ts,
             "last_bar_ts": _STATE.last_bar_ts,
+            "last_event_kind": _STATE.last_event_kind,
+            "stall_seconds": _STATE.stall_seconds,
             "updated_at": _STATE.updated_at,
         }

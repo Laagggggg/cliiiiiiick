@@ -126,6 +126,7 @@ def run_live_monitor(mode: str = "polling") -> dict:
 
             cfg = get_alpaca_config()
             alpaca_ok = source_primary in {"ALPACA_BARS", "ALPACA_WEBSOCKET"}
+            feed_label = "IEX" if "iex" in str(cfg.get("ws_url", "")).lower() else "UNKNOWN_FEED"
             return {
                 "status": status,
                 "mode": "live_monitor",
@@ -146,6 +147,9 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else ("Run websocket monitor and keep data fresh" if not healthy else "None"),
                 "keys_present": cfg.get("keys_present", False),
                 "ws_health": "connected" if (ws_state and ws_state.get("connected")) else "disconnected",
+                "feed_label": feed_label,
+                "last_event_kind": (ws_state or {}).get("last_event_kind", "none"),
+                "stall_seconds": int((ws_state or {}).get("stall_seconds", 0) or 0),
                 "alpaca_call_succeeded": alpaca_ok,
                 "bars_loaded": bars_loaded,
             }
@@ -178,6 +182,9 @@ def run_live_monitor(mode: str = "polling") -> dict:
             "next_action": "Restore providers/websocket and rerun API Doctor",
             "keys_present": get_alpaca_config().get("keys_present", False),
             "ws_health": "disconnected",
+            "feed_label": "CACHE",
+            "last_event_kind": "none",
+            "stall_seconds": 0,
             "alpaca_call_succeeded": False,
             "bars_loaded": len(rows),
         }
@@ -206,6 +213,9 @@ def run_live_monitor(mode: str = "polling") -> dict:
         "next_action": "Run API Doctor",
         "keys_present": get_alpaca_config().get("keys_present", False),
         "ws_health": "disconnected",
+        "feed_label": "REPLAY",
+        "last_event_kind": "none",
+        "stall_seconds": 0,
         "alpaca_call_succeeded": False,
         "bars_loaded": 0,
     }

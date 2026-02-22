@@ -89,6 +89,23 @@ def _write_recon_snapshot(ts: str, local_qty: float, remote_qty: float, open_ord
     return snapshot
 
 
+def _hydrate_startup_state(broker: AlpacaPaperBroker) -> dict:
+    try:
+        broker_positions = _retry_call(broker.list_positions)
+        open_orders = _retry_call(broker.list_orders, status="open", limit=50)
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "HALT", "reason": "BROKER_BOOTSTRAP_FAILED", "decision_sentence": f"HALT: startup broker sync failed ({exc}). Next: rerun doctor.", "next_action": "Run API Doctor and retry daemon"}
+    local = get_open_position("SPY", DB_PATH)
+    local_qty = float(local["qty"]) if local else 0.0
+    remote_qty = _broker_qty(broker_positions, "SPY")
+    mismatch = abs(local_qty - remote_qty) > 1e-6
+    if mismatch and not open_orders:
+        return {"status": "HALT", "reason": "BOOT_RECON_MISMATCH", "decision_sentence": "HALT: startup reconciliation mismatch with no open orders. Next: flatten/resync.", "next_action": "Flatten positions and rerun daemon"}
+    if mismatch and open_orders:
+        return {"status": "WARN", "reason": "BOOT_RECON_WARN", "decision_sentence": "WARN: startup mismatch with open orders. Next: allow fills to settle.", "next_action": "Monitor open orders"}
+    return {"status": "ok", "reason": "BOOT_SYNC_OK", "decision_sentence": "OK: startup broker/local state aligned. Next: daemon loop running.", "next_action": "None"}
+
+
 def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) -> dict:
     bars_1h = provider.get_bars("SPY", "1h", limit=120)
     rows_1h = [{"timestamp": b.timestamp, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume} for b in bars_1h]
@@ -167,6 +184,11 @@ def run_broker_paper_daemon(seconds: int = 30, interval_s: int = 5) -> dict:
 
     provider = AlpacaMarketDataProvider()
     actions: list[dict] = []
+    boot = _hydrate_startup_state(broker)
+    actions.append(boot)
+    _append_tick_summary(boot)
+    if boot.get("status") == "HALT":
+        return {"status": "HALT", "mode_truth": "BROKER FILLS", "actions": actions, "account": get_account_summary(DB_PATH), "recon_journal": str(RECON_JOURNAL), "tick_journal": str(DAEMON_TICK_JOURNAL), "decision_sentence": boot.get("decision_sentence"), "next_action": boot.get("next_action")}
     start = time.time()
     while time.time() - start < max(1, seconds):
         try:

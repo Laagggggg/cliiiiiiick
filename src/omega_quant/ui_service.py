@@ -35,6 +35,10 @@ class TruthPayload(TypedDict):
     next_action: str
     freshness_basis: str
     live_verified: bool
+    feed_label: str
+    ws_health: str
+    last_event_kind: str
+    stall_seconds: int
     decision_sentence: str
 
 
@@ -57,6 +61,10 @@ def _truth_defaults() -> TruthPayload:
         "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor",
         "freshness_basis": "static_sample",
         "live_verified": False,
+        "feed_label": "DEMO",
+        "ws_health": "disconnected",
+        "last_event_kind": "none",
+        "stall_seconds": 0,
         "decision_sentence": "NO_TRADE: startup state. Next: run monitor or paper cycle.",
         "provenance": {"provider_primary": "CSV_SAMPLE", "data_grade": "CSV_SAMPLE", "last_bar_ts": "unknown", "freshness_label": "N/A (static sample)", "freshness_basis": "static_sample", "dataset_sha256": "unknown", "bars_loaded": 0, "recon_status": "UNKNOWN"},
     }
@@ -259,6 +267,24 @@ def _api_doctor() -> dict:
 
 
 
+
+
+def _make_live_verified() -> dict:
+    steps = []
+    for action in ["alpaca_setup", "live_readiness", "api_doctor"]:
+        out = run_action(action, {})
+        steps.append({"action": action, "status": out.get("status"), "next_action": out.get("next_action")})
+        if out.get("status") in {"HALT", "error"}:
+            return _enforce_truth_payload({"status": "HALT", "reason": f"{action}_failed", "steps": steps, "next_action": out.get("next_action", "Run API Doctor"), "decision_sentence": f"HALT: {action} failed"})
+    script = Path(__file__).resolve().parents[2] / "scripts" / "live_ws_acceptance.py"
+    proc = subprocess.run(f"python {script} --seconds 15", shell=True, capture_output=True, text=True)
+    steps.append({"action": "live_ws_acceptance", "status": "ok" if proc.returncode == 0 else "HALT", "output": (proc.stdout + proc.stderr).strip()})
+    mon = run_live_monitor(mode="websocket")
+    payload = _enforce_truth_payload({**mon, "provider_primary": mon.get("source", "fallback"), "provider_secondary": mon.get("source_secondary", "none")})
+    if not payload.get("live_verified"):
+        return _enforce_truth_payload({**payload, "status": "HALT", "steps": steps, "decision_sentence": "HALT: live verification did not pass", "next_action": payload.get("next_action", "Run doctor and acceptance scripts")})
+    return _enforce_truth_payload({**payload, "status": "ok", "steps": steps, "decision_sentence": "OK: live verification passed", "next_action": "Run broker daemon if ready"})
+
 def _platform_helper(action: str) -> dict:
     is_win = platform.system().lower().startswith("win")
     if action == "open_alpaca_keys_page":
@@ -395,6 +421,8 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return _live_readiness_payload()
     if action in {"open_alpaca_keys_page", "open_env_notepad", "copy_env_example"}:
         return _enforce_truth_payload(_platform_helper(action))
+    if action == "make_live_verified":
+        return _make_live_verified()
     if action == "dry_run":
         return _enforce_truth_payload({"status": "ok", "mode": "dry_run", "message": "Dry run ready.", "decision_sentence": "NO_TRADE: dry run"})
     if action == "live_check":

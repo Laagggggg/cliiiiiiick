@@ -36,22 +36,28 @@ def main() -> int:
     ensure_websocket("SPY")
     start = time.time()
     event_count = 0
+    saw_q = False
+    saw_b = False
     last = {}
     while time.time() - start < args.seconds:
         st = get_ws_state()
         last = st
-        event_count = int(bool(st.get("last_quote_ts"))) + int(bool(st.get("last_trade_ts"))) + int(bool(st.get("last_bar_ts")))
-        if event_count > 0:
+        saw_q = bool(st.get("last_quote_ts"))
+        saw_b = bool(st.get("last_bar_ts"))
+        event_count = int(saw_q) + int(bool(st.get("last_trade_ts"))) + int(saw_b)
+        if saw_q and saw_b:
             break
         time.sleep(1)
 
-    ok = event_count > 0
+    ok = saw_q and saw_b
     result = {
         "status": "PASS" if ok else "FAIL",
-        "reason": "" if ok else "ws_connected_no_qtb_events",
+        "reason": "" if ok else "ws_missing_quote_or_bar_events",
         "next_action": "Check Alpaca data entitlements/subscription and websocket auth" if not ok else "None",
         "metrics": {
             "event_count": event_count,
+            "saw_quote": saw_q,
+            "saw_bar": saw_b,
             "transport": last.get("transport"),
             "last_quote_ts": last.get("last_quote_ts"),
             "last_trade_ts": last.get("last_trade_ts"),

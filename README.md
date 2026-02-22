@@ -310,3 +310,7 @@ On non-Windows, these return explicit no-op guidance.
 3. Run `python scripts/live_ws_acceptance.py --seconds 15`.
 4. If status is SKIP/FAIL, follow `next_action` in the artifact JSON.
 5. If still not verified, keep fail-closed and operate in DEMO until connectivity/entitlements are fixed.
+
+
+### One-click UI flow
+Use the **Make Live Verified** button in the UI. It runs setup/readiness/doctor/ws-acceptance in order and halts with a single next action if any step fails.
