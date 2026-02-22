@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import TypedDict
 
+from omega_quant.config.alpaca_config import get_alpaca_config
 from omega_quant.execution.broker.alpaca_paper import AlpacaPaperBroker
 from omega_quant.live_gates import live_gates
 from omega_quant.monitor.live_monitor import run_live_monitor
@@ -105,6 +106,59 @@ def _last_cycle_payload() -> dict:
         }
     )
 
+
+
+
+def _alpaca_setup_payload() -> dict:
+    cfg = get_alpaca_config()
+    missing = [k for k in ["ALPACA_API_KEY", "ALPACA_API_SECRET"] if not cfg["api_key"] if k=="ALPACA_API_KEY"]
+    # explicit map for UI
+    missing = []
+    if not cfg["api_key"]:
+        missing.append("ALPACA_API_KEY")
+    if not cfg["api_secret"]:
+        missing.append("ALPACA_API_SECRET")
+    setup_block = 'Copy .env.example to .env and set keys. PowerShell: Copy-Item .env.example .env; notepad .env'
+    return {
+        "status": "ok" if not missing else "HALT",
+        "reason": "alpaca_config_ready" if not missing else "missing_alpaca_keys",
+        "next_action": "Run API Doctor" if not missing else setup_block,
+        "alpaca": {
+            "missing": missing,
+            "trading_base_url": cfg["trading_base_url"],
+            "data_base_url": cfg["data_base_url"],
+            "ws_url": cfg["ws_url"],
+            "warnings": cfg.get("warnings", []),
+            "env_helper": setup_block,
+        },
+    }
+
+
+def _live_readiness_payload() -> dict:
+    from importlib.util import find_spec
+    from omega_quant.monitor.live_ws import get_ws_state
+
+    mon = run_live_monitor(mode="websocket")
+    cfg = get_alpaca_config()
+    ws = get_ws_state()
+    fresh = mon.get("freshness_seconds")
+    keys_ok = bool(cfg.get("api_key") and cfg.get("api_secret"))
+    ws_lib = find_spec("websockets") is not None
+    checks = {
+        "keys_present": {"ok": keys_ok, "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET in .env"},
+        "websockets_installed": {"ok": ws_lib, "next_action": "python -m pip install websockets"},
+        "websocket_connected": {"ok": bool(ws.get("connected")), "next_action": "Run API Doctor and websocket monitor"},
+        "polling_fallback_active": {"ok": "POLLING" in str(mon.get("transport", "")), "next_action": "If expected live, fix websocket/auth"},
+        "last_bar_recent": {"ok": isinstance(fresh, int) and fresh < 7200, "next_action": "Check provider/data freshness"},
+    }
+    overall_ok = all(v["ok"] for v in checks.values() if v is not checks["polling_fallback_active"])
+    return _enforce_truth_payload({
+        **mon,
+        "status": "ok" if overall_ok else "HALT",
+        "reason": "live_ready" if overall_ok else "live_readiness_failed",
+        "next_action": "Run live monitor acceptance" if overall_ok else "Review failed checklist items and fix env/connectivity",
+        "readiness": checks,
+    })
 
 def _api_doctor() -> dict:
     req = ["ALPACA_API_KEY", "ALPACA_API_SECRET", "ALPACA_BASE_URL"]
@@ -249,6 +303,10 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return _enforce_truth_payload({**out, "mode_truth": "LIVE_MONITOR_DEMO", "decision_sentence": "NO_TRADE: replay mode"})
     if action == "api_doctor":
         return _api_doctor()
+    if action == "alpaca_setup":
+        return _alpaca_setup_payload()
+    if action == "live_readiness":
+        return _live_readiness_payload()
     if action == "dry_run":
         return _enforce_truth_payload({"status": "ok", "mode": "dry_run", "message": "Dry run ready.", "decision_sentence": "NO_TRADE: dry run"})
     if action == "live_check":

@@ -86,6 +86,8 @@ def run_live_monitor(mode: str = "polling") -> dict:
                     transport = str(ws_state.get("transport", "REQUIRES ALPACA KEYS -> POLLING"))
                     fallback_reason = transport
 
+            if data_grade == "CSV_SAMPLE":
+                transport = "POLLING"
             healthy = fresh < 7200 and transport == "WEBSOCKET" and data_grade != "CSV_SAMPLE"
             fallback = not healthy and transport != "WEBSOCKET"
             status = "ok" if (healthy or fallback) else "HALT"

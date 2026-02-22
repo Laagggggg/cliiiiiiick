@@ -249,3 +249,36 @@ python main_doctor.py
 ```powershell
 python scripts/live_monitor_acceptance.py --seconds 60
 ```
+
+
+## Beginner Operator Steps (PowerShell, exact)
+
+1. Run launcher:
+```powershell
+.\RUN_ME.ps1
+```
+
+2. Create `.env` from template and fill keys:
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+3. Run doctor:
+```powershell
+python main_doctor.py
+```
+
+4. Run UI:
+```powershell
+python main_ui.py
+```
+
+5. Run acceptance scripts:
+```powershell
+python scripts/live_monitor_acceptance.py --seconds 60
+python scripts/broker_daemon_acceptance.py
+python scripts/ui_truth_contract_acceptance.py
+```
+
+If Alpaca credentials are missing, live checks are **UNVERIFIED (missing external creds)** and must be validated with mock tests (`pytest -q`) or by setting real keys in `.env`.

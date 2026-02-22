@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import json
-import os
-from datetime import datetime, timezone
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from omega_quant.config.alpaca_config import get_alpaca_config
 from omega_quant.data.providers.base import Bar, MarketDataProvider, Quote
 
 
 class AlpacaMarketDataProvider(MarketDataProvider):
     def __init__(self) -> None:
-        self.key = os.getenv("ALPACA_API_KEY", "")
-        self.secret = os.getenv("ALPACA_API_SECRET", "")
-        self.base = os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
+        cfg = get_alpaca_config()
+        self.key = cfg["api_key"]
+        self.secret = cfg["api_secret"]
+        self.base = cfg["data_base_url"]
 
     def source_name(self) -> str:
         return "alpaca"

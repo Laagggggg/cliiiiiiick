@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, 'src')
 
+from omega_quant.ops.env_loader import load_dotenv_if_present
 from omega_quant.ops.repo_guard import ensure_repo_root_or_exit
 
 
@@ -70,6 +71,7 @@ def api_doctor() -> dict:
 
 
 def main() -> int:
+    load_dotenv_if_present()
     ensure_repo_root_or_exit("main_doctor.py")
     checks = [
         ("compile", [sys.executable, "-m", "compileall", "-q", "."]),

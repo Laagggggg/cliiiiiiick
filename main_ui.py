@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 import json
 
+from omega_quant.ops.env_loader import load_dotenv_if_present
 from omega_quant.ops.repo_guard import ensure_repo_root_or_exit
 from omega_quant.ui_service import run_action
 
@@ -24,6 +25,9 @@ HTML = """
 <div class='card'><h3>Last Decision</h3><div id='decision'>-</div></div>
 <div class='card'><h3>Data Provenance</h3><div id='prov'>-</div></div>
 </div>
+<div class='card'><h3>Alpaca Setup</h3><pre id='alpaca_setup'>Loading...</pre></div>
+<div class='card'><h3>Live Readiness Checklist</h3><pre id='readiness'>Loading...</pre></div>
+<div class='card'><h3>Live Price Sparkline</h3><canvas id='spark' width='640' height='120' style='border:1px solid #ccc'></canvas></div>
 <div class='card'><h3>Actions</h3>
 <label>Paper Start $ <input id='starting_capital' value='5000'></label>
 <label>Cycles/Steps <input id='cycles' value='2'></label><br>
@@ -37,6 +41,8 @@ HTML = """
 <button onclick="runAction('proof_check')">Verify Proof</button>
 <button onclick="runAction('download_audit_pack')">Download Audit Pack</button>
 <button onclick="runAction('api_doctor')">Run API Doctor</button>
+<button onclick="runAction('alpaca_setup')">Alpaca Setup</button>
+<button onclick="runAction('live_readiness')">Live Readiness</button>
 <button onclick="runAction('live_monitor')">Live Monitor (Polling)</button>
 <button onclick="runAction('websocket_monitor')">Live Monitor (Websocket)</button>
 <button onclick="runAction('replay_live_stream')">Replay Live Stream</button>
@@ -44,9 +50,10 @@ HTML = """
 <div class='card'><h3>Charts</h3><a href='artifacts/equity_curve.png'>equity_curve.png</a> | <a href='artifacts/drawdown.png'>drawdown.png</a> | <a href='artifacts/trade_markers.png'>trade_markers.png</a></div>
 <div class='card'><h3>Output</h3><pre id='out'>Ready</pre></div>
 <script>
-function fmt(n){return Number(n||0).toFixed(2)}
+const PRICES=[];function fmt(n){return Number(n||0).toFixed(2)}
+function drawSpark(){const c=document.getElementById('spark');const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);if(PRICES.length<2){return;}const min=Math.min(...PRICES),max=Math.max(...PRICES);const span=(max-min)||1;ctx.beginPath();PRICES.forEach((v,i)=>{const x=(i/(PRICES.length-1))*c.width;const y=c.height-((v-min)/span)*c.height; if(i===0){ctx.moveTo(x,y);} else {ctx.lineTo(x,y);}});ctx.strokeStyle='#1a73e8';ctx.lineWidth=2;ctx.stroke();}
 async function api(body){const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});return await r.json();}
-async function runAction(action){const p=await api(`action=${encodeURIComponent(action)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);if(action.includes('monitor')) setTruthFromMonitor(p); await refresh();}
+async function runAction(action){const p=await api(`action=${encodeURIComponent(action)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);if(action.includes('monitor')||action==='live_readiness') setTruthFromMonitor(p);if(action==='alpaca_setup'){document.getElementById('alpaca_setup').textContent=JSON.stringify(p.alpaca||p,null,2);}if(action==='live_readiness'){document.getElementById('readiness').textContent=JSON.stringify(p.readiness||p,null,2);} await refresh();}
 
 async function runWizard(){
   const s=document.getElementById('starting_capital').value;
@@ -62,7 +69,7 @@ async function runBrokerDaemon(seconds){const p=await api(`action=broker_paper_d
 async function resetPaper(){const s=document.getElementById('starting_capital').value;const p=await api(`action=reset_paper&starting_capital=${encodeURIComponent(s)}`);document.getElementById('out').textContent=JSON.stringify(p,null,2);await refresh();}
 function setTruth(p){const prov=(p.provenance||{});document.getElementById('mode_truth').textContent=p.mode_truth||'SIMULATED FILLS';document.getElementById('data_grade').textContent=p.data_grade||'UNKNOWN (run doctor)';document.getElementById('transport').textContent=p.transport||'POLLING (run websocket monitor)';document.getElementById('primary').textContent=p.provider_primary||(prov.source_primary||'fallback (run monitor)');document.getElementById('secondary').textContent=p.provider_secondary||(prov.source_secondary||'none');const r=(p.reconciliation||(prov.reconciliation)||{});document.getElementById('recon').textContent=(p.recon_status||((r.passed===undefined||r.passed===null)?'UNKNOWN':(r.passed?'PASS':'FAIL')));document.getElementById('fresh').textContent=(p.freshness_label??p.freshness_seconds??prov.freshness_seconds??'UNKNOWN (run doctor)');document.getElementById('last_bar_ts').textContent=(p.last_bar_ts??prov.end??'UNKNOWN (run monitor)');document.getElementById('next_action').textContent=(p.next_action??'Run API Doctor');document.getElementById('demo_warn').textContent=((p.data_grade==='CSV_SAMPLE'||p.data_grade==='CACHED')?'NOT LIVE DATA: demo/cached feed in use. Resolve provider/websocket for live data.':'');}
 function setTruthFromMonitor(p){setTruth({mode_truth:p.mode_truth,transport:p.transport,provider_primary:p.provider_primary||p.source,provider_secondary:p.provider_secondary||p.source_secondary,reconciliation:p.reconciliation,freshness_seconds:p.freshness_seconds,last_bar_ts:p.last_bar_ts});}
-async function refresh(){const p=await api('action=paper_account');const a=p.account||{};setTruth(p);document.getElementById('equity').textContent=`$${fmt(a.equity)}`;document.getElementById('initial').textContent=`$${fmt(a.initial_equity)}`;document.getElementById('session_pnl').textContent=fmt((a.equity||0)-(a.initial_equity||0));document.getElementById('ret').textContent=`${fmt(a.return_pct)}%`;document.getElementById('ru').textContent=`${fmt(a.realized_pnl)} / ${fmt(a.unrealized_pnl)}`;document.getElementById('trades').textContent=a.trade_count??0;document.getElementById('win').textContent=(a.win_rate_label||`${fmt(a.win_rate_pct)}%`);document.getElementById('awl').textContent=`${fmt(a.avg_win)} / ${fmt(a.avg_loss)}`;document.getElementById('exp').textContent=`${fmt(a.expectancy)}${a.expectancy_confidence==='low sample'?' (low sample)':''}`;document.getElementById('pf').textContent=(a.profit_factor_label??fmt(a.profit_factor));document.getElementById('fill_model').textContent=(p.fill_model||'SIM_OHLC_LIMIT');document.getElementById('decision').textContent=JSON.stringify(p.last_decision||{});document.getElementById('prov').textContent=JSON.stringify(p.provenance||{});}refresh();
+async function refresh(){const p=await api('action=paper_account');const a=p.account||{};setTruth(p); if(p.price){PRICES.push(Number(p.price)); if(PRICES.length>64){PRICES.shift();} drawSpark();}document.getElementById('equity').textContent=`$${fmt(a.equity)}`;document.getElementById('initial').textContent=`$${fmt(a.initial_equity)}`;document.getElementById('session_pnl').textContent=fmt((a.equity||0)-(a.initial_equity||0));document.getElementById('ret').textContent=`${fmt(a.return_pct)}%`;document.getElementById('ru').textContent=`${fmt(a.realized_pnl)} / ${fmt(a.unrealized_pnl)}`;document.getElementById('trades').textContent=a.trade_count??0;document.getElementById('win').textContent=(a.win_rate_label||`${fmt(a.win_rate_pct)}%`);document.getElementById('awl').textContent=`${fmt(a.avg_win)} / ${fmt(a.avg_loss)}`;document.getElementById('exp').textContent=`${fmt(a.expectancy)}${a.expectancy_confidence==='low sample'?' (low sample)':''}`;document.getElementById('pf').textContent=(a.profit_factor_label??fmt(a.profit_factor));document.getElementById('fill_model').textContent=(p.fill_model||'SIM_OHLC_LIMIT');document.getElementById('decision').textContent=JSON.stringify(p.last_decision||{});document.getElementById('prov').textContent=JSON.stringify(p.provenance||{}); const live=await api('action=live_readiness'); setTruthFromMonitor(live); document.getElementById('readiness').textContent=JSON.stringify(live.readiness||{},null,2); if(live.price){PRICES.push(Number(live.price)); if(PRICES.length>64){PRICES.shift();} drawSpark();} const setup=await api('action=alpaca_setup'); document.getElementById('alpaca_setup').textContent=JSON.stringify(setup.alpaca||{},null,2);}refresh(); setInterval(refresh,1500);
 </script></body></html>
 """
 
@@ -93,6 +100,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(run_action(action, params))
 
 def main() -> None:
+    load_dotenv_if_present()
     ensure_repo_root_or_exit("main_ui.py")
     server = HTTPServer(("0.0.0.0", 8080), Handler)
     print("UI running on http://localhost:8080")

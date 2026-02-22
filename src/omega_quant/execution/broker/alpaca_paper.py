@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
+from omega_quant.config.alpaca_config import get_alpaca_config
+
+
 class AlpacaPaperBroker:
     def __init__(self) -> None:
-        self.key = os.getenv("ALPACA_API_KEY", "")
-        self.secret = os.getenv("ALPACA_API_SECRET", "")
-        self.base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        cfg = get_alpaca_config()
+        self.key = cfg["api_key"]
+        self.secret = cfg["api_secret"]
+        self.base = cfg["trading_base_url"]
         self._last_call_ts = 0.0
 
     def enabled(self) -> bool:

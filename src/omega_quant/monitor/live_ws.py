@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from omega_quant.config.alpaca_config import get_alpaca_config
 
 
 ARTIFACTS = Path("artifacts")
@@ -132,9 +133,10 @@ def _ingest_raw(msg: dict[str, Any]) -> None:
 async def _run_ws(symbol: str, max_messages: int | None = None) -> None:
     import websockets  # type: ignore
 
-    key = os.getenv("ALPACA_API_KEY", "")
-    secret = os.getenv("ALPACA_API_SECRET", "")
-    endpoint = os.getenv("ALPACA_WS_URL", "wss://stream.data.alpaca.markets/v2/iex")
+    cfg = get_alpaca_config()
+    key = cfg["api_key"]
+    secret = cfg["api_secret"]
+    endpoint = cfg["ws_url"]
 
     if not key or not secret:
         reason = "REQUIRES ALPACA KEYS -> POLLING"
@@ -186,8 +188,9 @@ def _thread_main(symbol: str) -> None:
 
 def ensure_websocket(symbol: str = "SPY") -> dict[str, Any]:
     global _THREAD
-    key = os.getenv("ALPACA_API_KEY", "")
-    secret = os.getenv("ALPACA_API_SECRET", "")
+    cfg = get_alpaca_config()
+    key = cfg["api_key"]
+    secret = cfg["api_secret"]
     if not key or not secret:
         reason = "REQUIRES ALPACA KEYS -> POLLING"
         _set_status(connected=False, reconnecting=False, failed=True, transport=reason, error=reason)
