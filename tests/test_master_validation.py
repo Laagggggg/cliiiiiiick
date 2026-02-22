@@ -1,5 +1,6 @@
 from omega_quant.live_gates import RISK_ACK_TEXT
 from omega_quant.ops.master_validation import master_validation
+from omega_quant.risk.guards import REQUIRED_GUARDS
 
 
 def test_master_validation_release_ready_false_when_drift_bad(monkeypatch):
@@ -37,6 +38,8 @@ def test_master_validation_release_ready_true(monkeypatch):
         "recovery_factor": 3.4,
         "expectancy": 0.12,
     }
+    # Supply all guard checks as passing
+    all_guards = {k: True for k in REQUIRED_GUARDS}
     out = master_validation(
         metrics,
         expected_features=[1, 2, 3, 4],
@@ -45,6 +48,7 @@ def test_master_validation_release_ready_true(monkeypatch):
         risk_ack=RISK_ACK_TEXT,
         paper_days=45,
         micro_live_days=45,
+        guard_checks=all_guards,
     )
     assert out["release_ready"]
     assert out["live"]["live_allowed"]

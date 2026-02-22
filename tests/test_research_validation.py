@@ -17,10 +17,21 @@ def test_gt_score_positive_case():
 
 
 def test_whites_and_spa_proxies():
-    rc = whites_reality_check(0.12, 0.08)
-    spa = hansens_spa(0.12, 0.05)
+    # Scalar fallback path
+    rc = whites_reality_check(best_strategy_return=0.12, bootstrap_mean_best=0.08)
+    spa = hansens_spa(best_strategy_return=0.12, benchmark_return=0.05)
     assert rc["gate"] == "PASS"
     assert spa["gate"] == "PASS"
+
+
+def test_whites_bootstrap_path():
+    strat = [0.01, 0.005, 0.008, -0.002, 0.003, 0.006, 0.004, -0.001, 0.007, 0.002,
+             0.005, 0.004, 0.003, 0.006, 0.001, 0.008, -0.003, 0.005, 0.004, 0.002]
+    bench = [0.002, 0.001, 0.003, 0.001, -0.001, 0.002, 0.001, 0.0, 0.002, 0.001,
+             0.001, 0.002, 0.001, 0.001, 0.0, 0.003, 0.001, 0.001, 0.002, 0.001]
+    rc = whites_reality_check(strat, bench)
+    assert "p_value" in rc
+    assert "edge" in rc
 
 
 def test_monte_carlo_sharpe():

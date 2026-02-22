@@ -39,7 +39,12 @@ def calculate_position_size_v5(
 
     kelly_size = capital * kelly_pct * kelly_fraction / entry
     fixed_frac_size = (capital * per_trade_risk_pct) / (atr * 2)
-    base = min(kelly_size if kelly_size > 0 else fixed_frac_size, fixed_frac_size)
+    # Use Kelly when it yields a positive size; fall back to fixed fraction otherwise.
+    # Cap at fixed fraction to prevent over-leverage from aggressive Kelly estimates.
+    if kelly_size > 0:
+        base = min(kelly_size, fixed_frac_size * 2.0)  # allow Kelly up to 2x fixed frac
+    else:
+        base = fixed_frac_size
 
     h_mult = hurst_multiplier(hurst)
     composite = signal_conf * regime_conf * alignment * macro * h_mult * cb_mult
