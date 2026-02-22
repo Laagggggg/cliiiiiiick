@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -57,9 +58,34 @@ def _truth_defaults() -> TruthPayload:
         "freshness_basis": "static_sample",
         "live_verified": False,
         "decision_sentence": "NO_TRADE: startup state. Next: run monitor or paper cycle.",
+        "provenance": {"provider_primary": "CSV_SAMPLE", "data_grade": "CSV_SAMPLE", "last_bar_ts": "unknown", "freshness_label": "N/A (static sample)", "freshness_basis": "static_sample", "dataset_sha256": "unknown", "bars_loaded": 0, "recon_status": "UNKNOWN"},
     }
 
 
+
+
+
+def _csv_dataset_sha256(path: str = "data/spy_1h_sample.csv") -> str:
+    p = Path(path)
+    if not p.exists():
+        return "unknown"
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _provenance_from_truth(payload: dict) -> dict:
+    prov = payload.get("provenance") or {}
+    if not prov:
+        prov = {
+            "provider_primary": payload.get("provider_primary", "CSV_SAMPLE"),
+            "data_grade": payload.get("data_grade", "CSV_SAMPLE"),
+            "last_bar_ts": payload.get("last_bar_ts", "unknown"),
+            "freshness_label": payload.get("freshness_label", "N/A (static sample)"),
+            "freshness_basis": payload.get("freshness_basis", "static_sample"),
+            "dataset_sha256": _csv_dataset_sha256() if payload.get("data_grade") == "CSV_SAMPLE" else "n/a",
+            "bars_loaded": int(payload.get("bars_loaded", 0) or 0),
+            "recon_status": payload.get("recon_status", "UNKNOWN"),
+        }
+    return prov
 
 def _human_sentence(status: str, sentence: str, next_action: str) -> str:
     txt = (sentence or "").strip()
@@ -82,7 +108,8 @@ def _is_live_verified(payload: dict) -> bool:
     ws_health = str(payload.get("ws_health", "")).lower()
     recent = isinstance(fresh, int) and fresh <= 7200
     transport_ok = (transport == "WEBSOCKET" and "connected" in ws_health) or (transport == "POLLING" and recent)
-    return keys_present and provider_ok and transport_ok and last_bar_ts not in {"", "unknown", "not loaded (run monitor)"} and mode_truth == "LIVE_MONITOR_SAFE"
+    alpaca_call_succeeded = bool(payload.get("alpaca_call_succeeded"))
+    return keys_present and provider_ok and transport_ok and last_bar_ts not in {"", "unknown", "not loaded (run monitor)"} and mode_truth == "LIVE_MONITOR_SAFE" and alpaca_call_succeeded
 
 
 def _enforce_truth_payload(payload: dict) -> dict:
@@ -101,6 +128,7 @@ def _enforce_truth_payload(payload: dict) -> dict:
         out["freshness_label"] = out.get("freshness_label") or "cached"
     status = str(out.get("status", "HALT")).upper()
     out["decision_sentence"] = _human_sentence(status, str(out.get("decision_sentence", "")), str(out.get("next_action", "Run API Doctor")))
+    out["provenance"] = _provenance_from_truth(out)
     out["live_verified"] = _is_live_verified(out)
     return out
 
@@ -112,6 +140,7 @@ def _last_cycle_payload() -> dict:
     data = json.loads(p.read_text(encoding="utf-8"))
     last_reason = data.get("last_decision_reason", "NO_TRADE: no recent fills")
     prov = data.get("provenance", {})
+    bars_loaded = int(prov.get("bars_loaded", 0) or 0)
     recon = prov.get("reconciliation", {})
     source_primary = str(prov.get("source_primary", "fallback"))
     data_grade = "CSV_SAMPLE" if source_primary.startswith("csv:") else "FALLBACK_POLLING"
@@ -126,7 +155,7 @@ def _last_cycle_payload() -> dict:
             "mode_truth": "DEMO" if data_grade == "CSV_SAMPLE" else data.get("mode_truth", "SIMULATED FILLS"),
             "data_grade": data_grade,
             "transport": prov.get("transport", "POLLING"),
-            "provider_primary": source_primary,
+            "provider_primary": "CSV_SAMPLE" if source_primary.startswith("csv:") else str(source_primary).upper(),
             "provider_secondary": prov.get("source_secondary", "none"),
             "reconciliation": recon,
             "freshness_seconds": freshness if freshness is not None else fresh_obj["freshness_seconds"],
@@ -135,6 +164,7 @@ def _last_cycle_payload() -> dict:
             "last_bar_ts": prov.get("end", "not loaded (run monitor)"),
             "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else "Run live monitor",
             "proof_status": "PASS" if proof.get("ok") else "FAIL",
+            "bars_loaded": bars_loaded,
             "decision_sentence": str(last_reason),
         }
     )

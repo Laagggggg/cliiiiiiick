@@ -86,6 +86,7 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 raise RuntimeError("no_bars")
             _write_cache("SPY", "1h", rows, provider.source_name())
 
+            bars_loaded = len(rows)
             q = provider.get_quote("SPY")
             shadow = run_step(rows, rows[-20:] if len(rows) >= 20 else rows, equity=5000.0, has_position=False)
             source_primary = _provider_label(provider.source_name())
@@ -124,6 +125,7 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 sentence = f"NO_TRADE: live feed healthy ({fresh['freshness_basis']}={fresh['freshness_seconds']}s). Next: keep monitor running."
 
             cfg = get_alpaca_config()
+            alpaca_ok = source_primary in {"ALPACA_BARS", "ALPACA_WEBSOCKET"}
             return {
                 "status": status,
                 "mode": "live_monitor",
@@ -144,6 +146,8 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else ("Run websocket monitor and keep data fresh" if not healthy else "None"),
                 "keys_present": cfg.get("keys_present", False),
                 "ws_health": "connected" if (ws_state and ws_state.get("connected")) else "disconnected",
+                "alpaca_call_succeeded": alpaca_ok,
+                "bars_loaded": bars_loaded,
             }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")
@@ -174,6 +178,8 @@ def run_live_monitor(mode: str = "polling") -> dict:
             "next_action": "Restore providers/websocket and rerun API Doctor",
             "keys_present": get_alpaca_config().get("keys_present", False),
             "ws_health": "disconnected",
+            "alpaca_call_succeeded": False,
+            "bars_loaded": len(rows),
         }
 
     replay = replay_stream()
@@ -200,4 +206,6 @@ def run_live_monitor(mode: str = "polling") -> dict:
         "next_action": "Run API Doctor",
         "keys_present": get_alpaca_config().get("keys_present", False),
         "ws_health": "disconnected",
+        "alpaca_call_succeeded": False,
+        "bars_loaded": 0,
     }

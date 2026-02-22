@@ -24,6 +24,7 @@ from omega_quant.paper_account.db import (
 DB_PATH = "artifacts/paper_account.sqlite"
 CP_KEY = "broker_daemon:last_processed_bar_ts:SPY:1h"
 RECON_JOURNAL = Path("artifacts/recon_snapshots.jsonl")
+DAEMON_TICK_JOURNAL = Path("artifacts/daemon_tick_summary.jsonl")
 ORDER_STATES = {"new": "NEW", "partially_filled": "PARTIAL", "filled": "FILLED", "canceled": "CANCELED", "rejected": "REJECTED"}
 
 
@@ -42,6 +43,13 @@ def _order_state(order: dict) -> str:
     return ORDER_STATES.get(str(order.get("status", "")).lower(), "NEW")
 
 
+def _append_tick_summary(row: dict) -> None:
+    DAEMON_TICK_JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+    with DAEMON_TICK_JOURNAL.open("a", encoding="utf-8") as f:
+        import json
+        f.write(json.dumps(row, sort_keys=True) + "\n")
+
+
 def _retry_call(fn, *args, **kwargs):
     delay = 1
     for i in range(4):
@@ -52,6 +60,13 @@ def _retry_call(fn, *args, **kwargs):
                 raise
             time.sleep(delay)
             delay = min(8, delay * 2)
+
+
+def _safe_get_order_by_client_id(broker: AlpacaPaperBroker, coid: str) -> tuple[dict | None, bool]:
+    try:
+        return broker.get_order_by_client_id(coid), False
+    except Exception:  # noqa: BLE001
+        return None, True
 
 
 def _write_recon_snapshot(ts: str, local_qty: float, remote_qty: float, open_orders: list[dict], account: dict, broker_positions: list[dict]) -> dict:
@@ -105,7 +120,11 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
 
     if decision["status"] == "ENTER" and not pos:
         coid = _client_order_id("SPY", "buy", bar["timestamp"], float(decision["qty"]))
-        existing = broker.get_order_by_client_id(coid) or (get_latest_order_event_by_client_id(coid, DB_PATH) or {}).get("payload")
+        remote_existing, lookup_failed = _safe_get_order_by_client_id(broker, coid)
+        local_existing = (get_latest_order_event_by_client_id(coid, DB_PATH) or {}).get("payload")
+        existing = remote_existing or local_existing
+        if lookup_failed and not local_existing:
+            return {"status": "HALT", "reason": "BROKER_LOOKUP_UNCERTAIN", "decision_sentence": "HALT: broker lookup failed and no local order record. Next: retry after broker recovery.", "next_action": "Run API Doctor and wait for broker recovery", "bar_ts": bar["timestamp"], "reconciliation": recon}
         detail = existing if existing else _retry_call(broker.place_market_order, "SPY", "buy", float(decision["qty"]), client_order_id=coid)
         oid = str(detail.get("id") or coid)
         od = _retry_call(broker.get_order, oid) if detail.get("id") else detail
@@ -118,7 +137,11 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
 
     if decision["status"] == "EXIT" and pos:
         coid = _client_order_id("SPY", "sell", bar["timestamp"], float(pos["qty"]))
-        existing = broker.get_order_by_client_id(coid) or (get_latest_order_event_by_client_id(coid, DB_PATH) or {}).get("payload")
+        remote_existing, lookup_failed = _safe_get_order_by_client_id(broker, coid)
+        local_existing = (get_latest_order_event_by_client_id(coid, DB_PATH) or {}).get("payload")
+        existing = remote_existing or local_existing
+        if lookup_failed and not local_existing:
+            return {"status": "HALT", "reason": "BROKER_LOOKUP_UNCERTAIN", "decision_sentence": "HALT: broker lookup failed and no local order record. Next: retry after broker recovery.", "next_action": "Run API Doctor and wait for broker recovery", "bar_ts": bar["timestamp"], "reconciliation": recon}
         detail = existing if existing else _retry_call(broker.place_market_order, "SPY", "sell", float(pos["qty"]), client_order_id=coid)
         oid = str(detail.get("id") or coid)
         od = _retry_call(broker.get_order, oid) if detail.get("id") else detail
@@ -147,9 +170,13 @@ def run_broker_paper_daemon(seconds: int = 30, interval_s: int = 5) -> dict:
     start = time.time()
     while time.time() - start < max(1, seconds):
         try:
-            actions.append(_step_once(broker, provider))
+            tick = _step_once(broker, provider)
+            actions.append(tick)
+            _append_tick_summary(tick)
         except Exception as exc:  # noqa: BLE001
-            actions.append({"status": "HALT", "reason": str(exc), "decision_sentence": f"HALT: daemon error {exc}. Next: run API Doctor.", "next_action": "Run API Doctor and inspect broker connectivity"})
+            tick = {"status": "HALT", "reason": str(exc), "decision_sentence": f"HALT: daemon error {exc}. Next: run API Doctor.", "next_action": "Run API Doctor and inspect broker connectivity"}
+            actions.append(tick)
+            _append_tick_summary(tick)
         time.sleep(max(1, interval_s))
 
-    return {"status": "ok", "mode_truth": "BROKER FILLS", "actions": actions, "account": get_account_summary(DB_PATH), "recon_journal": str(RECON_JOURNAL), "decision_sentence": "ok: broker daemon cycle complete. Next: review actions and reconciliation.", "next_action": "Continue daemon or inspect recon journal"}
+    return {"status": "ok", "mode_truth": "BROKER FILLS", "actions": actions, "account": get_account_summary(DB_PATH), "recon_journal": str(RECON_JOURNAL), "tick_journal": str(DAEMON_TICK_JOURNAL), "decision_sentence": "ok: broker daemon cycle complete. Next: review actions and reconciliation.", "next_action": "Continue daemon or inspect recon journal"}

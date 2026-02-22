@@ -279,6 +279,7 @@ python main_ui.py
 python scripts/live_monitor_acceptance.py --seconds 60
 python scripts/broker_daemon_acceptance.py
 python scripts/ui_truth_contract_acceptance.py
+python scripts/live_ws_acceptance.py --seconds 15
 ```
 
 If Alpaca credentials are missing, live checks are **UNVERIFIED (missing external creds)** and must be validated with mock tests (`pytest -q`) or by setting real keys in `.env`.
@@ -300,3 +301,12 @@ Otherwise UI shows `NOT LIVE ❌` with explicit `next_action`.
 - Copy .env.example -> .env
 
 On non-Windows, these return explicit no-op guidance.
+
+
+## If LIVE VERIFIED stays ❌
+
+1. Run `python main_doctor.py` and confirm keys and endpoints.
+2. Click `Live Monitor (Polling)` then `Live Monitor (Websocket)`.
+3. Run `python scripts/live_ws_acceptance.py --seconds 15`.
+4. If status is SKIP/FAIL, follow `next_action` in the artifact JSON.
+5. If still not verified, keep fail-closed and operate in DEMO until connectivity/entitlements are fixed.
