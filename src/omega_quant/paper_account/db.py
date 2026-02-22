@@ -152,11 +152,20 @@ def open_position(ts: str, symbol: str, qty: float, price: float, fee: float, db
         conn.execute("BEGIN")
         cash = float(conn.execute("SELECT cash FROM account_state WHERE account_id='paper'").fetchone()[0])
         conn.execute("UPDATE account_state SET cash=? WHERE account_id='paper'", (cash - fee,))
-        conn.execute(
-            "INSERT INTO positions(symbol,qty,avg_entry,last_price,unrealized_pnl,updated_at) VALUES(?,?,?,?,0,datetime('now')) "
-            "ON CONFLICT(symbol) DO UPDATE SET qty=excluded.qty, avg_entry=excluded.avg_entry, last_price=excluded.last_price, updated_at=datetime('now')",
-            (symbol, qty, price, price),
-        )
+        row = conn.execute("SELECT qty,avg_entry FROM positions WHERE symbol=?", (symbol,)).fetchone()
+        if row:
+            cur_qty, cur_avg = float(row[0]), float(row[1])
+            new_qty = cur_qty + qty
+            new_avg = ((cur_qty * cur_avg) + (qty * price)) / max(1e-12, new_qty)
+            conn.execute(
+                "UPDATE positions SET qty=?, avg_entry=?, last_price=?, updated_at=datetime('now') WHERE symbol=?",
+                (new_qty, new_avg, price, symbol),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO positions(symbol,qty,avg_entry,last_price,unrealized_pnl,updated_at) VALUES(?,?,?,?,0,datetime('now'))",
+                (symbol, qty, price, price),
+            )
         conn.execute("INSERT INTO fills(trade_id,ts,symbol,side,qty,price,fee) VALUES(NULL,?,?,?,?,?,?)", (ts, symbol, "BUY", qty, price, fee))
         _mark_to_market(conn, ts, price)
         conn.commit()

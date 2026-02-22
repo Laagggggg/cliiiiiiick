@@ -23,13 +23,13 @@ def default_metrics() -> dict:
 
 def _truth_defaults() -> dict:
     return {
-        "mode_truth": "SIMULATED FILLS",
+        "mode_truth": "LIVE_MONITOR_DEMO",
         "transport": "POLLING",
         "provider_primary": "fallback",
         "provider_secondary": "none",
         "reconciliation": {"passed": None, "max_diff_pct": None},
-        "freshness_seconds": "not loaded (run live/websocket monitor)",
-        "last_bar_ts": "not loaded (run live/websocket monitor)",
+        "freshness_seconds": "unknown -> NEXT ACTION: Run API Doctor",
+        "last_bar_ts": "unknown -> NEXT ACTION: Run live monitor",
     }
 
 
@@ -59,11 +59,33 @@ def _api_doctor() -> dict:
     req = ["ALPACA_API_KEY", "ALPACA_API_SECRET", "ALPACA_BASE_URL"]
     env = {k: bool(os.getenv(k)) for k in req}
     broker = AlpacaPaperBroker()
-    out = {"env": env, "broker_enabled": broker.enabled(), "errors": [], "ws_status": "unknown", "provider_status": "unknown", "last_bar_ts": "not loaded", "freshness_seconds": "not loaded"}
+    out = {
+        "env": env,
+        "ws_available": False,
+        "ws_health": "unknown",
+        "provider_primary": "unknown",
+        "provider_secondary": "none",
+        "broker_enabled": broker.enabled(),
+        "last_bar_ts": "unknown",
+        "freshness_seconds": "unknown",
+        "next_action": "Run API Doctor",
+        "errors": [],
+    }
+
+    try:
+        import importlib.util
+        out["ws_available"] = importlib.util.find_spec("websockets") is not None
+    except Exception:  # noqa: BLE001
+        out["ws_available"] = False
+
     if not broker.enabled():
+        out["ws_health"] = "REQUIRES ALPACA KEYS -> POLLING"
         out["status"] = "WARN"
         out["mode"] = "BROKER DISABLED / USING FALLBACK DATA"
+        out["next_action"] = "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL"
         return out
+
+    out["ws_health"] = "configured"
     try:
         acct = broker.get_account()
         out["account"] = {"id": acct.get("id"), "status": acct.get("status")}
@@ -71,22 +93,23 @@ def _api_doctor() -> dict:
         out["errors"].append(f"account:{exc}")
 
     try:
+        from datetime import datetime, timezone
         from omega_quant.data.providers.alpaca_provider import AlpacaMarketDataProvider
 
-        p = AlpacaMarketDataProvider()
-        out["quote_ok"] = p.get_quote("SPY") is not None
-        bars = p.get_bars("SPY", "1h", limit=100)
-        out["bars_1h"] = len(bars)
-        out["provider_status"] = "ok" if bars else "empty"
+        prov = AlpacaMarketDataProvider()
+        bars = prov.get_bars("SPY", "1h", limit=100)
+        out["provider_primary"] = prov.source_name()
+        out["provider_secondary"] = "fallback"
         if bars:
             out["last_bar_ts"] = bars[-1].timestamp
-            from datetime import datetime, timezone
             dt = datetime.fromisoformat(bars[-1].timestamp.replace("Z", "+00:00"))
             out["freshness_seconds"] = int((datetime.now(timezone.utc) - dt).total_seconds())
+            out["next_action"] = "Run websocket monitor"
+        else:
+            out["errors"].append("no_bars")
     except Exception as exc:  # noqa: BLE001
         out["errors"].append(f"data:{exc}")
 
-    out["ws_status"] = "REQUIRES ALPACA KEYS" if not broker.enabled() else "configured"
     out["status"] = "PASS" if not out["errors"] else "WARN"
     out["mode"] = "BROKER ENABLED" if out["status"] == "PASS" else "BROKER DISABLED / USING FALLBACK DATA"
     return out
@@ -148,14 +171,14 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return {"status": "ok" if proc.returncode == 0 else "error", "output": proc.stdout.strip(), "stderr": proc.stderr.strip()}
     if action == "live_monitor":
         out = run_live_monitor(mode="polling")
-        return {**out, "mode_truth": "SIMULATED FILLS"}
+        return {**out, "provider_primary": out.get("source", "fallback"), "provider_secondary": out.get("source_secondary", "none")}
     if action == "websocket_monitor":
         out = run_live_monitor(mode="websocket")
-        return {**out, "mode_truth": "SIMULATED FILLS", "provider_primary": out.get("source", "fallback"), "provider_secondary": "none", "reconciliation": {"passed": True, "max_diff_pct": 0.0}}
+        return {**out, "provider_primary": out.get("source", "fallback"), "provider_secondary": out.get("source_secondary", "none")}
     if action == "replay_live_stream":
         from omega_quant.monitor.live_ws import replay_stream
         out = replay_stream()
-        return {**out, "mode_truth": "SIMULATED FILLS"}
+        return {**out, "mode_truth": "LIVE_MONITOR_DEMO"}
     if action == "api_doctor":
         return _api_doctor()
     if action == "dry_run":

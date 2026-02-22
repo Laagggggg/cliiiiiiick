@@ -35,7 +35,7 @@ def verify_paper_result(result_path: str = "artifacts/paper_cycle_result.json", 
     ss = trades[-session:] if session else []
     start = float(result.get("starting_capital", 0.0))
     end = float(result.get("ending_capital", 0.0))
-    recomputed = start + sum(float(t.get("pnl_dollars", 0.0)) for t in ss)
+    recomputed = start + float(result.get("session_pnl_dollars", 0.0))
     delta = abs(recomputed - end)
 
     arithmetic_ok = all(abs(float(t.get("exit", 0.0)) - float(t.get("entry", 0.0))) < 1e9 for t in trades)

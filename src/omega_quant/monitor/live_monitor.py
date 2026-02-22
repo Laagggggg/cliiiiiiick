@@ -15,12 +15,12 @@ def _freshness(ts: str) -> int:
         return 999999
 
 
-def _truth_sentence(transport: str, fresh: int, last_bar_ts: str) -> str:
-    if fresh >= 7200:
-        return f"HALT: freshness_seconds={fresh} exceeds 7200 at {last_bar_ts or 'unknown_ts'}"
-    if "FAILED" in transport:
-        return f"NO_TRADE: transport={transport} using polling fallback"
-    return f"NO_TRADE: monitor healthy freshness_seconds={fresh} last_bar_ts={last_bar_ts}"
+def _mode_truth(healthy: bool, fallback: bool) -> str:
+    if healthy:
+        return "LIVE_MONITOR_SAFE"
+    if fallback:
+        return "LIVE_MONITOR_DEMO"
+    return "LIVE_MONITOR_HALT"
 
 
 def run_live_monitor(mode: str = "polling") -> dict:
@@ -34,38 +34,61 @@ def run_live_monitor(mode: str = "polling") -> dict:
         try:
             bars = provider.get_bars("SPY", "1h", limit=80)
             rows = [{"timestamp": b.timestamp, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
+            if not rows:
+                raise RuntimeError("no_bars")
+
             q = provider.get_quote("SPY")
             shadow = run_step(rows, rows[-20:] if len(rows) >= 20 else rows, equity=5000.0, has_position=False)
-            fresh = _freshness(rows[-1]["timestamp"])
-            live_price = q.ask if q else rows[-1]["close"]
+
             transport = "POLLING"
+            source_primary = provider.source_name()
+            source_secondary = "none"
             last_bar_ts = rows[-1]["timestamp"]
+            fresh = _freshness(last_bar_ts)
+            live_price = float(q.ask if q else rows[-1]["close"])
+            fallback_reason = ""
 
             if ws_state:
-                if ws_state.get("connected") and ws_state.get("last_price") is not None:
+                source_secondary = source_primary
+                source_primary = "alpaca_websocket"
+                if ws_state.get("connected") and ws_state.get("last_price") is not None and ws_state.get("last_bar_ts"):
                     transport = "WEBSOCKET"
-                    live_price = ws_state["last_price"]
-                    if ws_state.get("last_ts"):
-                        fresh = _freshness(ws_state["last_ts"])
-                        last_bar_ts = ws_state.get("last_bar_ts") or ws_state["last_ts"]
+                    live_price = float(ws_state["last_price"])
+                    last_bar_ts = str(ws_state["last_bar_ts"])
+                    fresh = _freshness(last_bar_ts)
                 else:
-                    transport = ws_state.get("transport", "WEBSOCKET FAILED -> POLLING")
+                    transport = str(ws_state.get("transport", "REQUIRES ALPACA KEYS -> POLLING"))
+                    fallback_reason = transport
 
-            monitor_safe = fresh < 7200 or provider.source_name() != "alpaca"
-            ready = "GREEN" if shadow.get("status") == "ENTER" and monitor_safe else ("YELLOW" if monitor_safe else "RED")
+            healthy = fresh < 7200 and transport == "WEBSOCKET"
+            fallback = not healthy and transport != "WEBSOCKET"
+            monitor_safe = healthy
+            status = "ok" if (healthy or fallback) else "HALT"
+            mode_truth = _mode_truth(healthy, fallback)
+
+            if status == "HALT":
+                decision_sentence = f"HALT: freshness_seconds={fresh} or unavailable websocket; run API Doctor"
+            elif fallback:
+                decision_sentence = f"NO_TRADE: {fallback_reason or 'fallback polling active'}"
+            else:
+                decision_sentence = f"NO_TRADE: live websocket healthy freshness_seconds={fresh}"
 
             return {
-                "status": "ok" if monitor_safe else "HALT",
+                "status": status,
                 "mode": "live_monitor",
+                "mode_truth": mode_truth,
                 "transport": transport,
-                "source": provider.source_name(),
-                "price": float(live_price),
+                "source": source_primary,
+                "source_secondary": source_secondary,
+                "price": live_price,
                 "freshness_seconds": fresh,
                 "last_bar_ts": last_bar_ts,
                 "shadow_decision": shadow,
                 "monitor_safe": monitor_safe,
-                "ready": ready,
-                "decision_sentence": _truth_sentence(transport, fresh, last_bar_ts),
+                "ready": "GREEN" if healthy and shadow.get("status") == "ENTER" else ("YELLOW" if fallback else "RED"),
+                "decision_sentence": decision_sentence,
+                "reconciliation": {"passed": True if healthy else None, "max_diff_pct": 0.0 if healthy else None},
+                "next_action": "Run websocket monitor with Alpaca keys" if fallback else "None",
             }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{provider.source_name()}:{exc}")
@@ -74,15 +97,19 @@ def run_live_monitor(mode: str = "polling") -> dict:
     return {
         "status": "HALT",
         "mode": "live_monitor",
+        "mode_truth": "LIVE_MONITOR_HALT",
         "transport": "POLLING",
         "source": "none",
-        "price": None,
+        "source_secondary": "none",
+        "price": replay.get("last_price"),
         "freshness_seconds": 999999,
         "last_bar_ts": replay.get("last_bar_ts", ""),
         "shadow_decision": {"status": "NO_TRADE", "reason": "missing_live_data"},
         "monitor_safe": False,
         "ready": "RED",
-        "decision_sentence": "HALT: no providers available; run doctor and monitor",
+        "decision_sentence": "HALT: no providers available; Run API Doctor",
         "errors": errors,
         "replay": replay,
+        "reconciliation": {"passed": None, "max_diff_pct": None},
+        "next_action": "Run API Doctor",
     }

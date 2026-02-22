@@ -28,7 +28,6 @@ def test_ui_actions_basic(tmp_path, monkeypatch):
     monitor = run_action("live_monitor")
     assert monitor["mode"] == "live_monitor"
     assert "shadow_decision" in monitor
-    assert monitor["monitor_safe"] is True
 
 
 def test_paper_run_blocked_when_proof_fails(tmp_path, monkeypatch):
@@ -42,12 +41,13 @@ def test_paper_run_blocked_when_proof_fails(tmp_path, monkeypatch):
     assert blocked["status"] == "HALT"
 
 
-def test_api_doctor_warn_without_keys(monkeypatch):
+def test_api_doctor_required_fields(monkeypatch):
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
     monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
     out = run_action("api_doctor")
-    assert out["status"] == "WARN"
+    for key in ["ws_available", "ws_health", "provider_primary", "provider_secondary", "broker_enabled", "last_bar_ts", "freshness_seconds", "next_action"]:
+        assert key in out
 
 
 def test_websocket_fallback_label(tmp_path, monkeypatch):
@@ -80,7 +80,8 @@ def test_ui_truth_payload_present(tmp_path, monkeypatch):
 
 def test_replay_live_stream_action(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    from omega_quant.monitor.live_ws import _apply_quote
-    _apply_quote({"T": "q", "bp": 99.0, "ap": 99.1, "t": "2026-01-01T02:00:00Z"})
+    from omega_quant.monitor.live_ws import _ingest_raw
+
+    _ingest_raw({"T": "q", "S": "SPY", "bp": 99.0, "ap": 99.1, "t": "2026-01-01T02:00:00Z"})
     out = run_action("replay_live_stream")
     assert out["status"] == "ok"

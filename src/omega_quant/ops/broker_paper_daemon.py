@@ -45,6 +45,7 @@ def _order_state(order: dict) -> str:
 
 
 def _write_recon_snapshot(ts: str, local_qty: float, remote_qty: float, open_orders: list[dict], account: dict, broker_positions: list[dict]) -> dict:
+    mismatch = abs(local_qty - remote_qty) > 1e-6
     snapshot = {
         "local_qty": local_qty,
         "remote_qty": remote_qty,
@@ -53,7 +54,8 @@ def _write_recon_snapshot(ts: str, local_qty: float, remote_qty: float, open_ord
         "local_cash": float(account.get("cash", 0.0)),
         "broker_positions": len(broker_positions),
         "max_diff_pct": (abs(local_qty - remote_qty) / max(1.0, abs(local_qty)) * 100.0),
-        "passed": abs(local_qty - remote_qty) <= 1e-6 or bool(open_orders),
+        "passed": (not mismatch) or bool(open_orders),
+        "status": "WARN" if mismatch and open_orders else ("PASS" if not mismatch else "FAIL"),
     }
     append_recon_snapshot(ts, snapshot, DB_PATH)
     export_recon_jsonl(str(RECON_JOURNAL), DB_PATH)
@@ -83,6 +85,9 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
     local_qty = float(pos["qty"]) if pos else 0.0
     remote_qty = _broker_qty(broker_positions, "SPY")
     recon = _write_recon_snapshot(bar["timestamp"], local_qty, remote_qty, open_orders, acct, broker_positions)
+    recon_warning = None
+    if recon.get("status") == "WARN":
+        recon_warning = "RECON_MISMATCH_WITH_OPEN_ORDERS"
     if not recon["passed"]:
         return {"status": "HALT", "reason": "RECON_MISMATCH", "local_qty": local_qty, "remote_qty": remote_qty, "bar_ts": bar["timestamp"], "reconciliation": recon}
 
@@ -97,7 +102,7 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
         open_position(bar["timestamp"], "SPY", q, px, abs(px * q * 0.0005), DB_PATH)
         append_order_event(bar["timestamp"], oid, coid, _order_state(od), od, DB_PATH)
         set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
-        return {"status": "ENTER", "order_id": oid, "client_order_id": coid, "qty": q, "price": px, "bar_ts": bar["timestamp"], "reconciliation": recon}
+        return {"status": "ENTER", "warning": recon_warning, "order_id": oid, "client_order_id": coid, "qty": q, "price": px, "bar_ts": bar["timestamp"], "reconciliation": recon}
 
     if d["status"] == "EXIT" and pos:
         coid = _client_order_id("SPY", "sell", bar["timestamp"], float(pos["qty"]))
@@ -110,10 +115,10 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
         close_position(bar["timestamp"], "SPY", px, abs(px * q * 0.0005), {"reason": d["reason"], "mode": "BROKER FILLS"}, DB_PATH)
         append_order_event(bar["timestamp"], oid, coid, _order_state(od), od, DB_PATH)
         set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
-        return {"status": "EXIT", "order_id": oid, "client_order_id": coid, "qty": q, "price": px, "bar_ts": bar["timestamp"], "reconciliation": recon}
+        return {"status": "EXIT", "warning": recon_warning, "order_id": oid, "client_order_id": coid, "qty": q, "price": px, "bar_ts": bar["timestamp"], "reconciliation": recon}
 
     set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
-    return {"status": d["status"], "reason": d.get("reason"), "bar_ts": bar["timestamp"], "reconciliation": recon}
+    return {"status": d["status"], "warning": recon_warning, "reason": d.get("reason"), "bar_ts": bar["timestamp"], "reconciliation": recon}
 
 
 def run_broker_paper_daemon(seconds: int = 30, interval_s: int = 5) -> dict:
