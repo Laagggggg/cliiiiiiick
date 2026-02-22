@@ -12,7 +12,7 @@ from omega_quant.ops.broker_paper_cycle import run_broker_paper_cycle
 from omega_quant.ops.broker_paper_daemon import run_broker_paper_daemon
 from omega_quant.ops.master_validation import master_validation
 from omega_quant.ops.proof_check import verify_paper_result
-from omega_quant.paper_account.db import get_account_summary, reset_account
+from omega_quant.paper_account.db import get_account_summary, list_trades, reset_account
 from omega_quant.research.checklist import render_go_no_go_markdown
 from omega_quant.research.report import render_report
 
@@ -47,6 +47,7 @@ def _last_cycle_payload() -> dict:
     data_grade = "CSV_SAMPLE" if str(prov.get("source_primary","")).startswith("csv:") else "FALLBACK_POLLING"
     freshness = prov.get("freshness_seconds")
     freshness_label = "N/A (static sample)" if data_grade == "CSV_SAMPLE" else (str(freshness) if freshness is not None else "unknown")
+    proof = verify_paper_result()
     return {
         "last_decision": {"sentence": str(last_reason)},
         "provenance": prov,
@@ -61,6 +62,7 @@ def _last_cycle_payload() -> dict:
         "freshness_label": freshness_label,
         "last_bar_ts": prov.get("end", "not loaded (run monitor)"),
         "next_action": "DEMO DATA (CSV). Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else "Run live monitor",
+        "proof_status": "PASS" if proof.get("ok") else "FAIL",
     }
 
 
@@ -247,7 +249,9 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return {"status": out.get("status", "HALT"), "mode": "broker_paper_daemon", "cycle": out, "decision_sentence": sentence, "account": get_account_summary(), **payload}
 
     if action == "paper_account":
-        return {"status": "ok", "account": get_account_summary(), **_last_cycle_payload()}
+        acct = get_account_summary()
+        tr = list_trades()[-20:]
+        return {"status": "ok", "account": acct, "last_trades": tr, **_last_cycle_payload()}
     if action == "reset_paper":
         return {"status": "ok", "account": reset_account(float(params.get("starting_capital", 5000.0))), **_truth_defaults()}
     if action == "proof_check":
@@ -265,6 +269,10 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return {**out, "provider_primary": out.get("source", "fallback"), "provider_secondary": out.get("source_secondary", "none")}
     if action == "websocket_monitor":
         out = run_live_monitor(mode="websocket")
+        if "REQUIRES ALPACA KEYS" in str(out.get("transport", "")):
+            out["status"] = "HALT"
+            out["decision_sentence"] = "HALT: missing Alpaca keys; set environment vars and rerun doctor"
+            out["next_action"] = 'PowerShell: $env:ALPACA_API_KEY="..."; $env:ALPACA_API_SECRET="..."; $env:ALPACA_BASE_URL="https://paper-api.alpaca.markets"; python main_doctor.py'
         return {**out, "provider_primary": out.get("source", "fallback"), "provider_secondary": out.get("source_secondary", "none")}
     if action == "replay_live_stream":
         from omega_quant.monitor.live_ws import replay_stream
