@@ -224,3 +224,34 @@ def test_broker_recon_warn_with_open_orders(monkeypatch):
     out = daemon._step_once(DummyBroker(), DummyProvider())
     assert out["reconciliation"]["status"] == "WARN"
 
+
+
+def test_alpaca_provider_data_grade_not_fallback(monkeypatch):
+    class AlpacaLike:
+        def source_name(self): return "alpaca"
+        def get_bars(self, *_a, **_k):
+            return [type("B", (), {"timestamp":"2026-01-01T00:00:00Z","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":1})]
+        def get_quote(self, *_a, **_k):
+            return type("Q", (), {"ask":1.0})
+
+    monkeypatch.setattr("omega_quant.monitor.live_monitor.get_provider_chain", lambda: [AlpacaLike()])
+    out = run_live_monitor(mode="polling")
+    assert out["data_grade"] != "FALLBACK_POLLING"
+    assert out["provider_primary"] if "provider_primary" in out else True
+
+
+def test_websocket_preferred_timestamp(monkeypatch):
+    class AlpacaLike:
+        def source_name(self): return "alpaca"
+        def get_bars(self, *_a, **_k):
+            return [type("B", (), {"timestamp":"2026-01-01T00:00:00Z","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":1})]
+        def get_quote(self, *_a, **_k):
+            return type("Q", (), {"ask":1.0})
+
+    monkeypatch.setattr("omega_quant.monitor.live_monitor.get_provider_chain", lambda: [AlpacaLike()])
+    monkeypatch.setattr("omega_quant.monitor.live_monitor.ensure_websocket", lambda *_a, **_k: {"ok": True})
+    monkeypatch.setattr("omega_quant.monitor.live_monitor.get_ws_state", lambda: {"connected": True, "last_price": 2.0, "last_bar_ts": "2026-01-01T02:00:00Z", "last_quote_ts": "2026-01-01T02:00:01Z", "last_trade_ts": "", "last_event_kind": "quote", "stall_seconds": 0})
+    out = run_live_monitor(mode="websocket")
+    assert out["transport"] == "WEBSOCKET"
+    assert out["last_bar_ts"] == "2026-01-01T02:00:00Z"
+

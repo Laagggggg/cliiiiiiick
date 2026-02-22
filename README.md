@@ -280,6 +280,7 @@ python scripts/live_monitor_acceptance.py --seconds 60
 python scripts/broker_daemon_acceptance.py
 python scripts/ui_truth_contract_acceptance.py
 python scripts/live_ws_acceptance.py --seconds 15
+python scripts/live_verified_acceptance.py
 ```
 
 If Alpaca credentials are missing, live checks are **UNVERIFIED (missing external creds)** and must be validated with mock tests (`pytest -q`) or by setting real keys in `.env`.
@@ -314,3 +315,6 @@ On non-Windows, these return explicit no-op guidance.
 
 ### One-click UI flow
 Use the **Make Live Verified** button in the UI. It runs setup/readiness/doctor/ws-acceptance in order and halts with a single next action if any step fails.
+
+
+Note: This system tracks **SPY (S&P 500 ETF)** for executable monitoring/trading semantics.

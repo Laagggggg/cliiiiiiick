@@ -90,7 +90,12 @@ def run_live_monitor(mode: str = "polling") -> dict:
             q = provider.get_quote("SPY")
             shadow = run_step(rows, rows[-20:] if len(rows) >= 20 else rows, equity=5000.0, has_position=False)
             source_primary = _provider_label(provider.source_name())
-            data_grade = "CSV_SAMPLE" if source_primary == "CSV_SAMPLE" else "FALLBACK_POLLING"
+            if source_primary == "CSV_SAMPLE":
+                data_grade = "CSV_SAMPLE"
+            elif source_primary == "ALPACA_BARS":
+                data_grade = "LIVE_POLLING"
+            else:
+                data_grade = "DEGRADED_POLLING"
             source_secondary = "none"
             transport = "POLLING"
             last_bar_ts = rows[-1]["timestamp"]
@@ -115,10 +120,12 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 transport = "POLLING"
             fresh = compute_freshness(data_grade=data_grade, bar_ts=last_bar_ts, quote_ts=quote_ts, trade_ts=trade_ts, ws_mode=(transport == "WEBSOCKET"))
             healthy = (fresh["freshness_seconds"] is not None and fresh["freshness_seconds"] <= 7200 and data_grade != "CSV_SAMPLE" and (transport == "WEBSOCKET" or transport == "POLLING"))
-            mode_truth = "DEMO" if data_grade == "CSV_SAMPLE" else ("LIVE_MONITOR_SAFE" if healthy else "LIVE_MONITOR_HALT")
-            status = "ok" if (healthy or data_grade == "CSV_SAMPLE") else "HALT"
+            mode_truth = "DEMO" if data_grade == "CSV_SAMPLE" else ("LIVE_MONITOR_SAFE" if healthy else ("SAFE_DEGRADED" if data_grade in {"DEGRADED_POLLING", "CACHED"} else "LIVE_MONITOR_HALT"))
+            status = "ok" if (healthy or data_grade in {"CSV_SAMPLE", "DEGRADED_POLLING"}) else "HALT"
             if data_grade == "CSV_SAMPLE":
                 sentence = "NO_TRADE: demo CSV sample active. Next: set Alpaca keys and run API Doctor."
+            elif data_grade == "DEGRADED_POLLING":
+                sentence = f"WARN: degraded polling provider {source_primary}. Next: run API Doctor and restore Alpaca feed."
             elif status == "HALT":
                 sentence = f"HALT: {fresh['freshness_label']} using {fresh['freshness_basis']}. Next: run API Doctor and monitor."
             else:
@@ -144,7 +151,7 @@ def run_live_monitor(mode: str = "polling") -> dict:
                 "monitor_safe": healthy,
                 "decision_sentence": sentence,
                 "reconciliation": {"passed": True if healthy else None, "max_diff_pct": 0.0 if healthy else None},
-                "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else ("Run websocket monitor and keep data fresh" if not healthy else "None"),
+                "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor" if data_grade == "CSV_SAMPLE" else ("Restore Alpaca provider/websocket" if data_grade == "DEGRADED_POLLING" else ("Run websocket monitor and keep data fresh" if not healthy else "None")),
                 "keys_present": cfg.get("keys_present", False),
                 "ws_health": "connected" if (ws_state and ws_state.get("connected")) else "disconnected",
                 "feed_label": feed_label,
@@ -190,12 +197,12 @@ def run_live_monitor(mode: str = "polling") -> dict:
         }
 
     replay = replay_stream()
-    fresh = compute_freshness(data_grade="FALLBACK_POLLING", bar_ts=replay.get("last_bar_ts", ""))
+    fresh = compute_freshness(data_grade="DEGRADED_POLLING", bar_ts=replay.get("last_bar_ts", ""))
     return {
         "status": "HALT",
         "mode": "live_monitor",
         "mode_truth": "LIVE_MONITOR_HALT",
-        "data_grade": "FALLBACK_POLLING",
+        "data_grade": "DEGRADED_POLLING",
         "transport": "POLLING",
         "source": "none",
         "source_secondary": "none",

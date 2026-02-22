@@ -6,7 +6,7 @@ from omega_quant.ui_service import run_action
 def test_startup_truth_not_unknown(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     out = run_action("paper_account")
-    assert out["data_grade"] in {"CSV_SAMPLE", "CACHED", "FALLBACK_POLLING"}
+    assert out["data_grade"] in {"CSV_SAMPLE", "CACHED", "DEGRADED_POLLING", "LIVE_POLLING"}
     assert "UNKNOWN" not in out["data_grade"]
 
 

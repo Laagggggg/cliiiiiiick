@@ -51,7 +51,7 @@ def _truth_defaults() -> TruthPayload:
         "mode_truth": "DEMO",
         "data_grade": "CSV_SAMPLE",
         "transport": "POLLING",
-        "provider_primary": "fallback",
+        "provider_primary": "CSV_SAMPLE",
         "provider_secondary": "none",
         "recon_status": "UNKNOWN",
         "reconciliation": {"passed": None, "max_diff_pct": None},
@@ -107,7 +107,7 @@ def _human_sentence(status: str, sentence: str, next_action: str) -> str:
 
 
 def _is_live_verified(payload: dict) -> bool:
-    keys_present = bool(payload.get("keys_present"))
+    keys_present = bool(payload.get("keys_present", False))
     provider_ok = str(payload.get("provider_primary", "")).upper() in {"ALPACA", "ALPACA_BARS", "ALPACA_WEBSOCKET"}
     transport = str(payload.get("transport", "")).upper()
     fresh = payload.get("freshness_seconds")
@@ -150,8 +150,8 @@ def _last_cycle_payload() -> dict:
     prov = data.get("provenance", {})
     bars_loaded = int(prov.get("bars_loaded", 0) or 0)
     recon = prov.get("reconciliation", {})
-    source_primary = str(prov.get("source_primary", "fallback"))
-    data_grade = "CSV_SAMPLE" if source_primary.startswith("csv:") else "FALLBACK_POLLING"
+    source_primary = str(prov.get("source_primary", "CSV_SAMPLE"))
+    data_grade = "CSV_SAMPLE" if source_primary.startswith("csv:") else "DEGRADED_POLLING"
     freshness = prov.get("freshness_seconds")
     fresh_obj = compute_freshness(data_grade=data_grade, bar_ts=str(prov.get("end", "")))
     proof = verify_paper_result()
@@ -280,7 +280,7 @@ def _make_live_verified() -> dict:
     proc = subprocess.run(f"python {script} --seconds 15", shell=True, capture_output=True, text=True)
     steps.append({"action": "live_ws_acceptance", "status": "ok" if proc.returncode == 0 else "HALT", "output": (proc.stdout + proc.stderr).strip()})
     mon = run_live_monitor(mode="websocket")
-    payload = _enforce_truth_payload({**mon, "provider_primary": mon.get("source", "fallback"), "provider_secondary": mon.get("source_secondary", "none")})
+    payload = _enforce_truth_payload({**mon, "provider_primary": mon.get("source", "UNKNOWN_PROVIDER"), "provider_secondary": mon.get("source_secondary", "none")})
     if not payload.get("live_verified"):
         return _enforce_truth_payload({**payload, "status": "HALT", "steps": steps, "decision_sentence": "HALT: live verification did not pass", "next_action": payload.get("next_action", "Run doctor and acceptance scripts")})
     return _enforce_truth_payload({**payload, "status": "ok", "steps": steps, "decision_sentence": "OK: live verification passed", "next_action": "Run broker daemon if ready"})
@@ -400,14 +400,14 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return {"status": "ok" if proc.returncode == 0 else "error", "output": proc.stdout.strip(), "stderr": proc.stderr.strip()}
     if action == "live_monitor":
         out = run_live_monitor(mode="polling")
-        return _enforce_truth_payload({**out, "provider_primary": out.get("source", "fallback"), "provider_secondary": out.get("source_secondary", "none")})
+        return _enforce_truth_payload({**out, "provider_primary": out.get("source", "UNKNOWN_PROVIDER"), "provider_secondary": out.get("source_secondary", "none")})
     if action == "websocket_monitor":
         out = run_live_monitor(mode="websocket")
         if "REQUIRES ALPACA KEYS" in str(out.get("transport", "")):
             out["status"] = "HALT"
             out["decision_sentence"] = "HALT: missing Alpaca keys"
             out["next_action"] = 'PowerShell: $env:ALPACA_API_KEY="..."; $env:ALPACA_API_SECRET="..."; $env:ALPACA_BASE_URL="https://paper-api.alpaca.markets"; python main_doctor.py'
-        return _enforce_truth_payload({**out, "provider_primary": out.get("source", "fallback"), "provider_secondary": out.get("source_secondary", "none")})
+        return _enforce_truth_payload({**out, "provider_primary": out.get("source", "UNKNOWN_PROVIDER"), "provider_secondary": out.get("source_secondary", "none")})
     if action == "replay_live_stream":
         from omega_quant.monitor.live_ws import replay_stream
 
@@ -423,6 +423,10 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return _enforce_truth_payload(_platform_helper(action))
     if action == "make_live_verified":
         return _make_live_verified()
+    if action == "live_verified_acceptance":
+        script = Path(__file__).resolve().parents[2] / "scripts" / "live_verified_acceptance.py"
+        proc = subprocess.run(f"python {script}", shell=True, capture_output=True, text=True)
+        return _enforce_truth_payload({"status": "ok" if proc.returncode == 0 else "HALT", "decision_sentence": "OK: live verified acceptance executed" if proc.returncode == 0 else "HALT: live verified acceptance failed", "next_action": "Inspect artifacts/live_verified_acceptance.json", "output": (proc.stdout + proc.stderr).strip()})
     if action == "dry_run":
         return _enforce_truth_payload({"status": "ok", "mode": "dry_run", "message": "Dry run ready.", "decision_sentence": "NO_TRADE: dry run"})
     if action == "live_check":
