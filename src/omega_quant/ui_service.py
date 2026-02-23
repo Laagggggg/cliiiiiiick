@@ -19,6 +19,7 @@ from omega_quant.ops.proof_check import verify_paper_result
 from omega_quant.paper_account.db import get_account_summary, get_paper_days_completed, list_trades, reset_account
 from omega_quant.research.checklist import render_go_no_go_markdown
 from omega_quant.research.report import render_report
+from omega_quant.time.market_hours import TIMEZONE_NEXT_ACTION, market_timezone_status
 
 
 class TruthPayload(TypedDict):
@@ -216,6 +217,7 @@ def _live_readiness_payload() -> dict:
     keys_ok = bool(cfg.get("api_key") and cfg.get("api_secret"))
     ws_lib = find_spec("websockets") is not None
     paper_days = get_paper_days_completed()
+    tz_status = market_timezone_status()
     checks = {
         "keys_present": {"ok": keys_ok, "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET in .env"},
         "websockets_installed": {"ok": ws_lib, "next_action": "python -m pip install websockets"},
@@ -223,6 +225,7 @@ def _live_readiness_payload() -> dict:
         "polling_fallback_active": {"ok": "POLLING" in str(mon.get("transport", "")), "next_action": "If expected live, fix websocket/auth"},
         "last_bar_recent": {"ok": isinstance(fresh, int) and fresh < 7200, "next_action": "Check provider/data freshness"},
         "paper_phase": {"ok": paper_days >= 45, "next_action": "Run paper until 45 unique days are completed"},
+        "market_timezone": {"ok": bool(tz_status.get("ok")), "next_action": tz_status.get("next_action", TIMEZONE_NEXT_ACTION)},
     }
     overall_ok = all(v["ok"] for v in checks.values() if v is not checks["polling_fallback_active"])
     return _enforce_truth_payload({
@@ -301,6 +304,12 @@ def _platform_helper(action: str) -> dict:
             subprocess.run('notepad .env', shell=True)
             return {"status": "ok", "reason": "opened_notepad", "next_action": "Fill .env then run API Doctor"}
         return {"status": "HALT", "reason": "non_windows_noop", "next_action": "Edit .env with your editor"}
+    if action == "copy_tzdata_fix_command":
+        cmd = "python -m pip install tzdata"
+        if is_win:
+            subprocess.run(f'echo {cmd.strip()}| clip', shell=True)
+            return {"status": "ok", "reason": "copied_tzdata_command", "command": cmd, "next_action": "Run copied command in activated venv"}
+        return {"status": "ok", "reason": "tzdata_command", "command": cmd, "next_action": "Run command in your shell"}
     if action == "copy_env_example":
         if Path('.env').exists():
             return {"status": "ok", "reason": "env_exists", "next_action": "Edit .env and run API Doctor"}
@@ -423,7 +432,7 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return _alpaca_setup_payload()
     if action == "live_readiness":
         return _live_readiness_payload()
-    if action in {"open_alpaca_keys_page", "open_env_notepad", "copy_env_example"}:
+    if action in {"open_alpaca_keys_page", "open_env_notepad", "copy_env_example", "copy_tzdata_fix_command"}:
         return _enforce_truth_payload(_platform_helper(action))
     if action == "make_live_verified":
         return _make_live_verified()

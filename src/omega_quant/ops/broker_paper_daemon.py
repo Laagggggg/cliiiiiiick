@@ -9,7 +9,7 @@ from pathlib import Path
 from omega_quant.data.providers.alpaca_provider import AlpacaMarketDataProvider
 from omega_quant.engine import run_step
 from omega_quant.execution.broker.alpaca_paper import AlpacaPaperBroker
-from omega_quant.time.market_hours import should_block_new_orders
+from omega_quant.time.market_hours import market_timezone_status, should_block_new_orders
 from omega_quant.paper_account.db import (
     append_equity_point,
     append_order_event,
@@ -175,6 +175,10 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
         warn_msg = "WARN: reconciliation mismatch with open orders; continuing until fills settle. Next: monitor order states."
 
     if decision["status"] == "ENTER" and not pos:
+        tz_status = market_timezone_status()
+        if not tz_status.get("ok"):
+            set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
+            return {"status": "HALT", "reason": tz_status.get("reason", "timezone_missing"), "bar_ts": bar["timestamp"], "reconciliation": recon, "canceled_stale_orders": canceled_stale_orders, "max_order_age_seconds": max_order_age_seconds, "decision_sentence": tz_status.get("decision_sentence", "HALT: market timezone unavailable. Next: install tzdata"), "next_action": tz_status.get("next_action", "Install tzdata (python -m pip install tzdata) and rerun")}
         if should_block_new_orders(bar["timestamp"]):
             set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
             return {"status": "HALT", "reason": "OUTSIDE_RTH", "bar_ts": bar["timestamp"], "reconciliation": recon, "canceled_stale_orders": canceled_stale_orders, "max_order_age_seconds": max_order_age_seconds, "decision_sentence": "HALT: outside RTH. Next: wait for market open or enable EXT_HOURS=true", "next_action": "Wait for 9:30-16:00 ET or set EXT_HOURS=true"}

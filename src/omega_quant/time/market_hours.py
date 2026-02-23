@@ -2,9 +2,24 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, time, timezone
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-EASTERN = ZoneInfo("America/New_York")
+
+TIMEZONE_NEXT_ACTION = "Install tzdata (python -m pip install tzdata) and rerun"
+
+
+def market_timezone_status() -> dict:
+    try:
+        ZoneInfo("America/New_York")
+        return {"ok": True, "status": "ok", "reason": "timezone_ready", "next_action": "None"}
+    except ZoneInfoNotFoundError:
+        return {
+            "ok": False,
+            "status": "HALT",
+            "reason": "timezone_missing",
+            "decision_sentence": "HALT: market timezone America/New_York unavailable. Next: install tzdata",
+            "next_action": TIMEZONE_NEXT_ACTION,
+        }
 
 
 def _parse_ts(ts: str | None) -> datetime:
@@ -18,7 +33,10 @@ def _parse_ts(ts: str | None) -> datetime:
 
 
 def is_rth(timestamp: str | None = None) -> bool:
-    dt = _parse_ts(timestamp).astimezone(EASTERN)
+    tz = market_timezone_status()
+    if not tz["ok"]:
+        return False
+    dt = _parse_ts(timestamp).astimezone(ZoneInfo("America/New_York"))
     if dt.weekday() >= 5:
         return False
     return time(9, 30) <= dt.time() <= time(16, 0)

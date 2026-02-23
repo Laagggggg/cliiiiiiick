@@ -48,6 +48,7 @@ HTML = """
 <button onclick="runAction('open_alpaca_keys_page')">Open Alpaca Keys Page</button>
 <button onclick="runAction('open_env_notepad')">Open .env in Notepad</button>
 <button onclick="runAction('copy_env_example')">Copy .env.example -> .env</button>
+<button onclick="runAction('copy_tzdata_fix_command')">Copy tzdata Fix Command</button>
 <button onclick="runAction('make_live_verified')">Make Live Verified</button>
 <button onclick="runAction('live_monitor')">Live Monitor (Polling)</button>
 <button onclick="runAction('websocket_monitor')">Live Monitor (Websocket)</button>
