@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from pathlib import Path
-
-ARTIFACTS = Path("artifacts")
-OUT = Path("dist")
 
 
 def _write_checksums(root: Path) -> None:
@@ -18,8 +16,13 @@ def _write_checksums(root: Path) -> None:
 
 
 def main() -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
-    tmp = OUT / "audit_pack_tmp"
+    base = Path.cwd()
+    artifacts = base / "artifacts"
+    out = base / "dist"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
+
+    tmp = out / "audit_pack_tmp"
     if tmp.exists():
         shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
@@ -44,21 +47,36 @@ def main() -> None:
         "broker_daemon_acceptance.json",
         "ui_truth_contract_acceptance.json",
     ]
-    for name in include:
-        src = ARTIFACTS / name
-        if src.exists():
-            shutil.copy2(src, tmp / name)
 
-    rotated = sorted(ARTIFACTS.glob("live_stream_*.jsonl"))
+    included_files: list[str] = []
+    missing_optional: list[str] = []
+    for name in include:
+        src = artifacts / name
+        if src.exists() and src.is_file():
+            shutil.copy2(src, tmp / name)
+            included_files.append(name)
+        else:
+            missing_optional.append(name)
+
+    rotated = sorted(artifacts.glob("live_stream_*.jsonl"))
     if rotated:
         idx = []
         for fp in rotated:
             shutil.copy2(fp, tmp / fp.name)
             idx.append(fp.name)
-        (tmp / "live_stream_rotations_index.json").write_text(__import__("json").dumps({"files": idx}, indent=2), encoding="utf-8")
+            included_files.append(fp.name)
+        (tmp / "live_stream_rotations_index.json").write_text(json.dumps({"files": idx}, indent=2), encoding="utf-8")
+
+    manifest = {
+        "status": "ok",
+        "base_dir": str(base),
+        "included_files": included_files,
+        "missing_optional_files": missing_optional,
+    }
+    (tmp / "audit_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     _write_checksums(tmp)
-    archive = shutil.make_archive(str(OUT / "paper_audit_pack"), "zip", tmp)
+    archive = shutil.make_archive(str(out / "paper_audit_pack"), "zip", tmp)
     shutil.rmtree(tmp)
     print(archive)
 

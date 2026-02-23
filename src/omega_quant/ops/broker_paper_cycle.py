@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from omega_quant.config.alpaca_config import get_alpaca_config
 from omega_quant.data.providers.alpaca_provider import AlpacaMarketDataProvider
 from omega_quant.engine import run_step
 from omega_quant.execution.broker.alpaca_paper import AlpacaPaperBroker
@@ -8,16 +9,46 @@ from omega_quant.paper_account.db import close_position, get_account_summary, ge
 DB_PATH = "artifacts/paper_account.sqlite"
 
 
+def _broker_ready() -> tuple[bool, str]:
+    cfg = get_alpaca_config()
+    if not cfg.get("api_key") or not cfg.get("api_secret") or not cfg.get("trading_base_url"):
+        return False, "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL and rerun API Doctor"
+    return True, "None"
+
+
 def run_broker_paper_cycle(steps: int = 1) -> dict:
+    ok, next_action = _broker_ready()
+    if not ok:
+        return {
+            "status": "HALT",
+            "reason": "BROKER_DISABLED_OR_CONFIG_MISSING",
+            "decision_sentence": "HALT: missing broker prerequisites. Next: configure Alpaca keys/base URL",
+            "next_action": next_action,
+        }
+
     broker = AlpacaPaperBroker()
     if not broker.enabled():
-        return {"status": "HALT", "reason": "BROKER DISABLED / USING FALLBACK DATA"}
+        return {
+            "status": "HALT",
+            "reason": "BROKER DISABLED / USING FALLBACK DATA",
+            "decision_sentence": "HALT: missing broker prerequisites. Next: configure Alpaca keys/base URL",
+            "next_action": next_action,
+        }
 
     provider = AlpacaMarketDataProvider()
     bars_1h = provider.get_bars("SPY", "1h", limit=100)
     rows_1h = [{"timestamp": b.timestamp, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume} for b in bars_1h]
     bars_1d = provider.get_bars("SPY", "1d", limit=60)
     rows_1d = [{"timestamp": b.timestamp, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume} for b in bars_1d]
+    if not rows_1h or not rows_1d:
+        return {
+            "status": "HALT",
+            "reason": "BROKER_PROVIDER_EMPTY",
+            "decision_sentence": "HALT: Alpaca provider returned no bars. Next: run API Doctor and verify connectivity/entitlements",
+            "next_action": "Run API Doctor and verify Alpaca data feed",
+            "actions": [],
+            "account": get_account_summary(DB_PATH),
+        }
 
     actions = []
     for _ in range(max(1, steps)):

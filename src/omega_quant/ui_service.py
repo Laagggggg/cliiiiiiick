@@ -240,7 +240,8 @@ def _live_readiness_payload() -> dict:
 
 def _api_doctor() -> dict:
     req = ["ALPACA_API_KEY", "ALPACA_API_SECRET", "ALPACA_BASE_URL"]
-    env = {k: bool(os.getenv(k)) for k in req}
+    cfg = get_alpaca_config()
+    env = {"ALPACA_API_KEY": bool(cfg.get("api_key")), "ALPACA_API_SECRET": bool(cfg.get("api_secret")), "ALPACA_BASE_URL": bool(cfg.get("trading_base_url"))}
     broker = AlpacaPaperBroker()
     out = {
         "env": env,
@@ -262,10 +263,11 @@ def _api_doctor() -> dict:
     except Exception:  # noqa: BLE001
         out["ws_available"] = False
 
-    if not broker.enabled():
+    if not all(env.values()):
         out["ws_health"] = "REQUIRES ALPACA KEYS -> POLLING"
         out["status"] = "WARN"
         out["mode"] = "BROKER DISABLED / USING FALLBACK DATA"
+        out["next_action"] = "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor"
         return out
     out["status"] = "PASS"
     out["mode"] = "BROKER ENABLED"
@@ -384,7 +386,7 @@ def run_action(action: str, params: dict | None = None) -> dict:
     if action == "broker_paper_run":
         doctor = _api_doctor()
         if doctor.get("status") != "PASS":
-            return _enforce_truth_payload({"status": "HALT", "reason": "BROKER DISABLED / USING FALLBACK DATA", "doctor": doctor, "decision_sentence": "HALT: missing broker prerequisites", "next_action": "Set Alpaca env vars and rerun API Doctor"})
+            return _enforce_truth_payload({"status": "HALT", "reason": "BROKER DISABLED / USING FALLBACK DATA", "doctor": doctor, "decision_sentence": "HALT: missing broker prerequisites", "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL and rerun API Doctor"})
         out = run_broker_paper_cycle(steps=int(params.get("steps", 1)))
         payload = _last_cycle_payload()
         return _enforce_truth_payload({"status": out.get("status", "HALT"), "mode": "broker_paper", "fill_model": "BROKER_FILL", "cycle": out, "decision_sentence": out.get("decision_sentence") or "NO_TRADE: broker paper completed", "account": get_account_summary(), **payload, "mode_truth": "BROKER FILLS"})
@@ -409,8 +411,11 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return {"status": "ok", "exists": p.exists(), "path": str(p), "content": p.read_text(encoding="utf-8") if p.exists() else "No paper reviews yet."}
     if action == "download_audit_pack":
         script = Path(__file__).resolve().parents[2] / "scripts" / "make_audit_pack.py"
-        proc = subprocess.run(f"python {script}", shell=True, capture_output=True, text=True)
-        return {"status": "ok" if proc.returncode == 0 else "error", "output": proc.stdout.strip(), "stderr": proc.stderr.strip()}
+        proc = subprocess.run(["python", str(script)], capture_output=True, text=True)
+        zip_path = Path("dist/paper_audit_pack.zip")
+        if proc.returncode == 0 and zip_path.exists():
+            return {"status": "ok", "output": proc.stdout.strip(), "path": str(zip_path)}
+        return {"status": "error", "output": proc.stdout.strip(), "stderr": proc.stderr.strip() or "audit pack generation failed"}
     if action == "live_monitor":
         out = run_live_monitor(mode="polling")
         return _enforce_truth_payload({**out, "provider_primary": out.get("source", "UNKNOWN_PROVIDER"), "provider_secondary": out.get("source_secondary", "none")})
