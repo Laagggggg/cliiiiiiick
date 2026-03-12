@@ -16,9 +16,10 @@ from omega_quant.ops.broker_paper_cycle import run_broker_paper_cycle
 from omega_quant.ops.broker_paper_daemon import run_broker_paper_daemon
 from omega_quant.ops.master_validation import master_validation
 from omega_quant.ops.proof_check import verify_paper_result
-from omega_quant.paper_account.db import get_account_summary, list_trades, reset_account
+from omega_quant.paper_account.db import get_account_summary, get_paper_days_completed, list_trades, reset_account
 from omega_quant.research.checklist import render_go_no_go_markdown
 from omega_quant.research.report import render_report
+from omega_quant.time.market_hours import TIMEZONE_NEXT_ACTION, market_timezone_status
 
 
 class TruthPayload(TypedDict):
@@ -43,7 +44,7 @@ class TruthPayload(TypedDict):
 
 
 def default_metrics() -> dict:
-    return {"wfe": 0.62, "dsr_confidence": 0.97, "pbo": 0.30, "white_rc_p": 0.03, "spa_p": 0.02, "recovery_factor": 3.4, "expectancy": 0.12}
+    return {"wfe": 0.62, "dsr_confidence": 0.97, "pbo": None, "pbo_label": "CPCV/PBO NOT IMPLEMENTED", "white_rc_p": 0.03, "spa_p": 0.02, "recovery_factor": 3.4, "expectancy": 0.12, "gt_score_label": "HEURISTIC (non-peer-reviewed)"}
 
 
 def _truth_defaults() -> TruthPayload:
@@ -215,12 +216,16 @@ def _live_readiness_payload() -> dict:
     fresh = mon.get("freshness_seconds")
     keys_ok = bool(cfg.get("api_key") and cfg.get("api_secret"))
     ws_lib = find_spec("websockets") is not None
+    paper_days = get_paper_days_completed()
+    tz_status = market_timezone_status()
     checks = {
         "keys_present": {"ok": keys_ok, "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET in .env"},
         "websockets_installed": {"ok": ws_lib, "next_action": "python -m pip install websockets"},
         "websocket_connected": {"ok": bool(ws.get("connected")), "next_action": "Run API Doctor and websocket monitor"},
         "polling_fallback_active": {"ok": "POLLING" in str(mon.get("transport", "")), "next_action": "If expected live, fix websocket/auth"},
         "last_bar_recent": {"ok": isinstance(fresh, int) and fresh < 7200, "next_action": "Check provider/data freshness"},
+        "paper_phase": {"ok": paper_days >= 45, "next_action": "Run paper until 45 unique days are completed"},
+        "market_timezone": {"ok": bool(tz_status.get("ok")), "next_action": tz_status.get("next_action", TIMEZONE_NEXT_ACTION)},
     }
     overall_ok = all(v["ok"] for v in checks.values() if v is not checks["polling_fallback_active"])
     return _enforce_truth_payload({
@@ -229,11 +234,14 @@ def _live_readiness_payload() -> dict:
         "reason": "live_ready" if overall_ok else "live_readiness_failed",
         "next_action": "Run live monitor acceptance" if overall_ok else "Review failed checklist items and fix env/connectivity",
         "readiness": checks,
+        "paper_days_completed": paper_days,
+        "paper_days_required": 45,
     })
 
 def _api_doctor() -> dict:
     req = ["ALPACA_API_KEY", "ALPACA_API_SECRET", "ALPACA_BASE_URL"]
-    env = {k: bool(os.getenv(k)) for k in req}
+    cfg = get_alpaca_config()
+    env = {"ALPACA_API_KEY": bool(cfg.get("api_key")), "ALPACA_API_SECRET": bool(cfg.get("api_secret")), "ALPACA_BASE_URL": bool(cfg.get("trading_base_url"))}
     broker = AlpacaPaperBroker()
     out = {
         "env": env,
@@ -255,10 +263,11 @@ def _api_doctor() -> dict:
     except Exception:  # noqa: BLE001
         out["ws_available"] = False
 
-    if not broker.enabled():
+    if not all(env.values()):
         out["ws_health"] = "REQUIRES ALPACA KEYS -> POLLING"
         out["status"] = "WARN"
         out["mode"] = "BROKER DISABLED / USING FALLBACK DATA"
+        out["next_action"] = "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL then run API Doctor"
         return out
     out["status"] = "PASS"
     out["mode"] = "BROKER ENABLED"
@@ -297,6 +306,12 @@ def _platform_helper(action: str) -> dict:
             subprocess.run('notepad .env', shell=True)
             return {"status": "ok", "reason": "opened_notepad", "next_action": "Fill .env then run API Doctor"}
         return {"status": "HALT", "reason": "non_windows_noop", "next_action": "Edit .env with your editor"}
+    if action == "copy_tzdata_fix_command":
+        cmd = "python -m pip install tzdata"
+        if is_win:
+            subprocess.run(f'echo {cmd.strip()}| clip', shell=True)
+            return {"status": "ok", "reason": "copied_tzdata_command", "command": cmd, "next_action": "Run copied command in activated venv"}
+        return {"status": "ok", "reason": "tzdata_command", "command": cmd, "next_action": "Run command in your shell"}
     if action == "copy_env_example":
         if Path('.env').exists():
             return {"status": "ok", "reason": "env_exists", "next_action": "Edit .env and run API Doctor"}
@@ -371,7 +386,7 @@ def run_action(action: str, params: dict | None = None) -> dict:
     if action == "broker_paper_run":
         doctor = _api_doctor()
         if doctor.get("status") != "PASS":
-            return _enforce_truth_payload({"status": "HALT", "reason": "BROKER DISABLED / USING FALLBACK DATA", "doctor": doctor, "decision_sentence": "HALT: missing broker prerequisites", "next_action": "Set Alpaca env vars and rerun API Doctor"})
+            return _enforce_truth_payload({"status": "HALT", "reason": "BROKER DISABLED / USING FALLBACK DATA", "doctor": doctor, "decision_sentence": "HALT: missing broker prerequisites", "next_action": "Set ALPACA_API_KEY/ALPACA_API_SECRET/ALPACA_BASE_URL and rerun API Doctor"})
         out = run_broker_paper_cycle(steps=int(params.get("steps", 1)))
         payload = _last_cycle_payload()
         return _enforce_truth_payload({"status": out.get("status", "HALT"), "mode": "broker_paper", "fill_model": "BROKER_FILL", "cycle": out, "decision_sentence": out.get("decision_sentence") or "NO_TRADE: broker paper completed", "account": get_account_summary(), **payload, "mode_truth": "BROKER FILLS"})
@@ -385,7 +400,7 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return _enforce_truth_payload({"status": out.get("status", "HALT"), "mode": "broker_paper_daemon", "fill_model": "BROKER_FILL", "cycle": out, "decision_sentence": out.get("decision_sentence") or "NO_TRADE: broker daemon completed", "account": get_account_summary(), **payload, "mode_truth": "BROKER FILLS"})
 
     if action == "paper_account":
-        return _enforce_truth_payload({"status": "ok", "account": get_account_summary(), "last_trades": list_trades()[-20:], "fill_model": "SIM_OHLC_LIMIT", **_last_cycle_payload()})
+        return _enforce_truth_payload({"status": "ok", "account": get_account_summary(), "last_trades": list_trades()[-20:], "paper_days_completed": get_paper_days_completed(), "paper_days_required": 45, "fill_model": "SIM_OHLC_LIMIT", **_last_cycle_payload()})
     if action == "reset_paper":
         return _enforce_truth_payload({"status": "ok", "account": reset_account(float(params.get("starting_capital", 5000.0))), "decision_sentence": "NO_TRADE: paper account reset"})
     if action == "proof_check":
@@ -396,8 +411,11 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return {"status": "ok", "exists": p.exists(), "path": str(p), "content": p.read_text(encoding="utf-8") if p.exists() else "No paper reviews yet."}
     if action == "download_audit_pack":
         script = Path(__file__).resolve().parents[2] / "scripts" / "make_audit_pack.py"
-        proc = subprocess.run(f"python {script}", shell=True, capture_output=True, text=True)
-        return {"status": "ok" if proc.returncode == 0 else "error", "output": proc.stdout.strip(), "stderr": proc.stderr.strip()}
+        proc = subprocess.run(["python", str(script)], capture_output=True, text=True)
+        zip_path = Path("dist/paper_audit_pack.zip")
+        if proc.returncode == 0 and zip_path.exists():
+            return {"status": "ok", "output": proc.stdout.strip(), "path": str(zip_path)}
+        return {"status": "error", "output": proc.stdout.strip(), "stderr": proc.stderr.strip() or "audit pack generation failed"}
     if action == "live_monitor":
         out = run_live_monitor(mode="polling")
         return _enforce_truth_payload({**out, "provider_primary": out.get("source", "UNKNOWN_PROVIDER"), "provider_secondary": out.get("source_secondary", "none")})
@@ -419,7 +437,7 @@ def run_action(action: str, params: dict | None = None) -> dict:
         return _alpaca_setup_payload()
     if action == "live_readiness":
         return _live_readiness_payload()
-    if action in {"open_alpaca_keys_page", "open_env_notepad", "copy_env_example"}:
+    if action in {"open_alpaca_keys_page", "open_env_notepad", "copy_env_example", "copy_tzdata_fix_command"}:
         return _enforce_truth_payload(_platform_helper(action))
     if action == "make_live_verified":
         return _make_live_verified()

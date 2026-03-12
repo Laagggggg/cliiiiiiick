@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from omega_quant.data.providers.alpaca_provider import AlpacaMarketDataProvider
 from omega_quant.engine import run_step
 from omega_quant.execution.broker.alpaca_paper import AlpacaPaperBroker
+from omega_quant.time.market_hours import market_timezone_status, should_block_new_orders
 from omega_quant.paper_account.db import (
     append_equity_point,
     append_order_event,
@@ -18,6 +21,7 @@ from omega_quant.paper_account.db import (
     get_latest_order_event_by_client_id,
     get_open_position,
     open_position,
+    register_paper_day,
     set_checkpoint,
 )
 
@@ -60,6 +64,36 @@ def _retry_call(fn, *args, **kwargs):
                 raise
             time.sleep(delay)
             delay = min(8, delay * 2)
+
+
+
+
+def _parse_order_age_seconds(order: dict) -> int | None:
+    ts = order.get("submitted_at") or order.get("created_at")
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _maybe_cancel_stale_orders(broker: AlpacaPaperBroker, open_orders: list[dict]) -> list[dict]:
+    max_age = int(os.getenv("MAX_ORDER_AGE_SECONDS", "180"))
+    canceled: list[dict] = []
+    for o in open_orders:
+        age = _parse_order_age_seconds(o)
+        if age is None or age <= max_age:
+            continue
+        oid = str(o.get("id") or "")
+        if not oid:
+            continue
+        broker.cancel_order(oid)
+        canceled.append({"order_id": oid, "age_seconds": age, "client_order_id": o.get("client_order_id", "")})
+    return canceled
 
 
 def _safe_get_order_by_client_id(broker: AlpacaPaperBroker, coid: str) -> tuple[dict | None, bool]:
@@ -124,9 +158,14 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
 
     broker_positions = _retry_call(broker.list_positions)
     open_orders = _retry_call(broker.list_orders, status="open", limit=50)
+    canceled_stale_orders = _maybe_cancel_stale_orders(broker, open_orders)
+    if canceled_stale_orders:
+        open_orders = _retry_call(broker.list_orders, status="open", limit=50)
     local_qty = float(pos["qty"]) if pos else 0.0
     remote_qty = _broker_qty(broker_positions, "SPY")
     recon = _write_recon_snapshot(bar["timestamp"], local_qty, remote_qty, open_orders, acct, broker_positions)
+    order_ages = [x for x in (_parse_order_age_seconds(o) for o in open_orders) if x is not None]
+    max_order_age_seconds = max(order_ages) if order_ages else 0
 
     if recon["status"] == "FAIL":
         return {"status": "HALT", "reason": "RECON_MISMATCH", "decision_sentence": "HALT: reconciliation mismatch with no open orders. Next: flatten, resync, and rerun doctor.", "next_action": "Check positions, flatten if needed, rerun API Doctor", "bar_ts": bar["timestamp"], "reconciliation": recon}
@@ -136,6 +175,13 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
         warn_msg = "WARN: reconciliation mismatch with open orders; continuing until fills settle. Next: monitor order states."
 
     if decision["status"] == "ENTER" and not pos:
+        tz_status = market_timezone_status()
+        if not tz_status.get("ok"):
+            set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
+            return {"status": "HALT", "reason": tz_status.get("reason", "timezone_missing"), "bar_ts": bar["timestamp"], "reconciliation": recon, "canceled_stale_orders": canceled_stale_orders, "max_order_age_seconds": max_order_age_seconds, "decision_sentence": tz_status.get("decision_sentence", "HALT: market timezone unavailable. Next: install tzdata"), "next_action": tz_status.get("next_action", "Install tzdata (python -m pip install tzdata) and rerun")}
+        if should_block_new_orders(bar["timestamp"]):
+            set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
+            return {"status": "HALT", "reason": "OUTSIDE_RTH", "bar_ts": bar["timestamp"], "reconciliation": recon, "canceled_stale_orders": canceled_stale_orders, "max_order_age_seconds": max_order_age_seconds, "decision_sentence": "HALT: outside RTH. Next: wait for market open or enable EXT_HOURS=true", "next_action": "Wait for 9:30-16:00 ET or set EXT_HOURS=true"}
         coid = _client_order_id("SPY", "buy", bar["timestamp"], float(decision["qty"]))
         remote_existing, lookup_failed = _safe_get_order_by_client_id(broker, coid)
         local_existing = (get_latest_order_event_by_client_id(coid, DB_PATH) or {}).get("payload")
@@ -150,7 +196,7 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
         open_position(bar["timestamp"], "SPY", q, px, abs(px * q * 0.0005), DB_PATH)
         append_order_event(bar["timestamp"], oid, coid, _order_state(od), od, DB_PATH)
         set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
-        return {"status": "ENTER", "warning": warn_msg, "order_id": oid, "client_order_id": coid, "qty": q, "price": px, "bar_ts": bar["timestamp"], "reconciliation": recon, "decision_sentence": f"TRADE: entered SPY qty={q:.4f} at {px:.2f}. Next: monitor reconciliation and exits.", "next_action": "Keep daemon running"}
+        return {"status": "ENTER", "warning": warn_msg, "order_id": oid, "client_order_id": coid, "qty": q, "price": px, "bar_ts": bar["timestamp"], "reconciliation": recon, "canceled_stale_orders": canceled_stale_orders, "max_order_age_seconds": max_order_age_seconds, "decision_sentence": f"TRADE: entered SPY qty={q:.4f} at {px:.2f}. Next: monitor reconciliation and exits.", "next_action": "Keep daemon running"}
 
     if decision["status"] == "EXIT" and pos:
         coid = _client_order_id("SPY", "sell", bar["timestamp"], float(pos["qty"]))
@@ -167,14 +213,14 @@ def _step_once(broker: AlpacaPaperBroker, provider: AlpacaMarketDataProvider) ->
         close_position(bar["timestamp"], "SPY", px, abs(px * q * 0.0005), {"reason": decision["reason"], "mode": "BROKER FILLS"}, DB_PATH)
         append_order_event(bar["timestamp"], oid, coid, _order_state(od), od, DB_PATH)
         set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
-        return {"status": "EXIT", "warning": warn_msg, "order_id": oid, "client_order_id": coid, "qty": q, "price": px, "bar_ts": bar["timestamp"], "reconciliation": recon, "decision_sentence": f"TRADE: exited SPY qty={q:.4f} at {px:.2f}. Next: monitor next signal.", "next_action": "Keep daemon running"}
+        return {"status": "EXIT", "warning": warn_msg, "order_id": oid, "client_order_id": coid, "qty": q, "price": px, "bar_ts": bar["timestamp"], "reconciliation": recon, "canceled_stale_orders": canceled_stale_orders, "max_order_age_seconds": max_order_age_seconds, "decision_sentence": f"TRADE: exited SPY qty={q:.4f} at {px:.2f}. Next: monitor next signal.", "next_action": "Keep daemon running"}
 
     set_checkpoint(CP_KEY, bar["timestamp"], DB_PATH)
     reason = decision.get("reason", "no entry condition")
     sentence = f"NO_TRADE: {reason}. Next: keep daemon running for next bar."
     if warn_msg:
         sentence = f"WARN: {warn_msg}"
-    return {"status": decision["status"], "warning": warn_msg, "reason": reason, "bar_ts": bar["timestamp"], "reconciliation": recon, "decision_sentence": sentence, "next_action": "Keep daemon running"}
+    return {"status": decision["status"], "warning": warn_msg, "reason": reason, "bar_ts": bar["timestamp"], "reconciliation": recon, "canceled_stale_orders": canceled_stale_orders, "max_order_age_seconds": max_order_age_seconds, "decision_sentence": sentence, "next_action": "Keep daemon running"}
 
 
 def run_broker_paper_daemon(seconds: int = 30, interval_s: int = 5) -> dict:
@@ -191,6 +237,8 @@ def run_broker_paper_daemon(seconds: int = 30, interval_s: int = 5) -> dict:
         return {"status": "HALT", "mode_truth": "BROKER FILLS", "actions": actions, "account": get_account_summary(DB_PATH), "recon_journal": str(RECON_JOURNAL), "tick_journal": str(DAEMON_TICK_JOURNAL), "decision_sentence": boot.get("decision_sentence"), "next_action": boot.get("next_action")}
     start = time.time()
     while time.time() - start < max(1, seconds):
+        day = datetime.now(timezone.utc).date().isoformat()
+        register_paper_day(day, DB_PATH)
         try:
             tick = _step_once(broker, provider)
             actions.append(tick)

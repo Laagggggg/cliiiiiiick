@@ -22,6 +22,7 @@ from omega_quant.paper_account.db import (
     list_equity_curve,
     list_trades,
     open_position,
+    register_paper_day,
 )
 
 ARTIFACTS = Path("artifacts")
@@ -111,6 +112,9 @@ def run_paper_cycle(starting_capital: float = 5000.0, cycles: int = 1) -> dict:
 
     rows_1h, source = _rows_from_provider("SPY", "1h", 800)
     rows_1d, _ = _rows_from_provider("SPY", "1d", 240)
+
+    day_key = rows_1h[-1]["timestamp"][:10]
+    paper_days_completed = register_paper_day(day_key, DB_PATH)
 
     rec = {"passed": True, "degraded": True, "max_diff_pct": 0.0}
     for p in get_provider_chain():
@@ -217,6 +221,8 @@ def run_paper_cycle(starting_capital: float = 5000.0, cycles: int = 1) -> dict:
         },
         "account_summary": acct,
         "risk_of_ruin": min(1.0, (len([t for t in trades if t["pnl_dollars"] < 0]) / max(1, len(trades)))),
+        "paper_days_completed": paper_days_completed,
+        "paper_days_required": 45,
     }
 
     result_path = ARTIFACTS / "paper_cycle_result.json"

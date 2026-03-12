@@ -318,3 +318,8 @@ Use the **Make Live Verified** button in the UI. It runs setup/readiness/doctor/
 
 
 Note: This system tracks **SPY (S&P 500 ETF)** for executable monitoring/trading semantics.
+
+## Repo hygiene
+
+- `misc/workflows.json` is a non-trading workflow sample and is excluded from trading runtime/release paths.
+- Trading runtime scope is `src/`, `scripts/`, `main_*.py`, and `artifacts/`.

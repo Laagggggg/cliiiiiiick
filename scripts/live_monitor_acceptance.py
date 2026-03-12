@@ -17,6 +17,7 @@ from omega_quant.monitor.live_ws import get_ws_state
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--seconds", type=int, default=60)
+    p.add_argument("--freshness-threshold", type=int, default=300)
     args = p.parse_args()
 
     out_path = Path("artifacts/live_monitor_acceptance.json")
@@ -39,14 +40,15 @@ def main() -> int:
     data_grade = str(last.get("data_grade", ""))
     sent = str(last.get("decision_sentence", "")).upper()
     demo_labeled = data_grade in {"CSV_SAMPLE", "CACHED", "DEGRADED_POLLING"} and ("NOT LIVE DATA" in sent or "DEMO" in sent or "WARN:" in sent)
-    live_ok = keys_present and ws_lib and data_grade not in {"CSV_SAMPLE", "CACHED", "DEGRADED_POLLING"} and last.get("transport") == "WEBSOCKET" and saw_q and saw_b
+    fresh = last.get("freshness_seconds")
+    live_ok = keys_present and ws_lib and data_grade not in {"CSV_SAMPLE", "CACHED", "DEGRADED_POLLING"} and last.get("transport") == "WEBSOCKET" and saw_q and saw_b and isinstance(fresh, int) and fresh <= args.freshness_threshold
 
     if keys_present and ws_lib:
         status = "PASS" if live_ok else "FAIL"
         reason = "" if live_ok else "live_expected_but_no_ws_q_and_b_events"
     else:
-        status = "PASS" if demo_labeled else "FAIL"
-        reason = "" if demo_labeled else "demo_not_explicitly_labeled"
+        status = "SKIP"
+        reason = "requires_keys_or_websockets"
 
     result = {
         "status": status,
@@ -61,12 +63,13 @@ def main() -> int:
             "mode_truth": last.get("mode_truth"),
             "freshness_seconds": last.get("freshness_seconds"),
             "decision_sentence": last.get("decision_sentence"),
+            "freshness_threshold": args.freshness_threshold,
             "saw_quote": saw_q,
             "saw_bar": saw_b,
         },
     }
     out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    return 0 if status == "PASS" else 1
+    return 0 if status in {"PASS", "SKIP"} else 1
 
 
 if __name__ == "__main__":

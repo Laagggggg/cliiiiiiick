@@ -27,6 +27,15 @@ try {
 
   $env:PYTHONPATH = "src"
 
+  python -c "from zoneinfo import ZoneInfo; ZoneInfo('America/New_York')"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "Timezone database missing; installing tzdata..." -ForegroundColor Yellow
+    python -m pip install tzdata
+    if ($LASTEXITCODE -ne 0) { Halt-Step "tzdata install failed." "Run: python -m pip install tzdata and rerun .\RUN_ME.ps1" }
+    python -c "from zoneinfo import ZoneInfo; ZoneInfo('America/New_York')"
+    if ($LASTEXITCODE -ne 0) { Halt-Step "Timezone check failed after tzdata install." "Run: python -m pip install --upgrade tzdata and rerun .\RUN_ME.ps1" }
+  }
+
   python -m compileall -q .
   if ($LASTEXITCODE -ne 0) { Halt-Step "Compile check failed." "Run: python -m compileall -q . and fix syntax errors." }
 

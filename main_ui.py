@@ -10,6 +10,7 @@ import json
 
 from omega_quant.ops.env_loader import load_dotenv_if_present
 from omega_quant.ops.repo_guard import ensure_repo_root_or_exit
+from omega_quant.ops.ui_artifacts import artifact_target
 from omega_quant.ui_service import run_action
 
 HTML = """
@@ -27,7 +28,7 @@ HTML = """
 </div>
 <div class='card'><h3>Alpaca Setup</h3><pre id='alpaca_setup'>Loading...</pre></div>
 <div class='card'><h3>Live Readiness Checklist</h3><pre id='readiness'>Loading...</pre></div>
-<div class='card'><h3>Startup Step</h3><div id='startup_step'>DEMO inferred. Next: Run API Doctor.</div></div>
+<div class='card'><h3>Startup Step</h3><div id='startup_step'>DEMO inferred. Next: Run API Doctor.</div><div>Paper days completed: <b id='paper_days_progress'>0 / 45</b></div></div>
 <div class='card'><h3>Live Price Sparkline</h3><div id='spark_overlay'>No live ticks yet — run Live Monitor (Polling/Websocket).</div><canvas id='spark' width='640' height='120' style='border:1px solid #ccc'></canvas></div>
 <div class='card'><h3>Actions</h3>
 <label>Paper Start $ <input id='starting_capital' value='5000'></label>
@@ -47,6 +48,7 @@ HTML = """
 <button onclick="runAction('open_alpaca_keys_page')">Open Alpaca Keys Page</button>
 <button onclick="runAction('open_env_notepad')">Open .env in Notepad</button>
 <button onclick="runAction('copy_env_example')">Copy .env.example -> .env</button>
+<button onclick="runAction('copy_tzdata_fix_command')">Copy tzdata Fix Command</button>
 <button onclick="runAction('make_live_verified')">Make Live Verified</button>
 <button onclick="runAction('live_monitor')">Live Monitor (Polling)</button>
 <button onclick="runAction('websocket_monitor')">Live Monitor (Websocket)</button>
@@ -77,9 +79,10 @@ function setTruthFromMonitor(p){setTruth({mode_truth:p.mode_truth,transport:p.tr
 
 async function seedSparkFromDemo(){if(PRICES.length>0)return;const m=await api('action=live_monitor');if(m&&m.price){for(let i=0;i<12;i++){PRICES.push(Number(m.price));}drawSpark();}}
 
-async function refresh(){const p=await api('action=paper_account');const a=p.account||{};setTruth(p); if(p.price){PRICES.push(Number(p.price)); if(PRICES.length>64){PRICES.shift();} drawSpark();}document.getElementById('equity').textContent=`$${fmt(a.equity)}`;document.getElementById('initial').textContent=`$${fmt(a.initial_equity)}`;document.getElementById('session_pnl').textContent=fmt((a.equity||0)-(a.initial_equity||0));document.getElementById('ret').textContent=`${fmt(a.return_pct)}%`;document.getElementById('ru').textContent=`${fmt(a.realized_pnl)} / ${fmt(a.unrealized_pnl)}`;document.getElementById('trades').textContent=a.trade_count??0;document.getElementById('win').textContent=(a.win_rate_label||`${fmt(a.win_rate_pct)}%`);document.getElementById('awl').textContent=`${fmt(a.avg_win)} / ${fmt(a.avg_loss)}`;document.getElementById('exp').textContent=`${fmt(a.expectancy)}${a.expectancy_confidence==='low sample'?' (low sample)':''}`;document.getElementById('pf').textContent=(a.profit_factor_label??fmt(a.profit_factor));document.getElementById('fill_model').textContent=(p.fill_model||'SIM_OHLC_LIMIT');document.getElementById('decision').textContent=JSON.stringify(p.last_decision||{});const prov=(p.provenance&&Object.keys(p.provenance).length)?p.provenance:{provider_primary:p.provider_primary,data_grade:p.data_grade,last_bar_ts:p.last_bar_ts,freshness_label:p.freshness_label,freshness_basis:p.freshness_basis,dataset_sha256:'unknown',bars_loaded:0,recon_status:p.recon_status};document.getElementById('prov').textContent=JSON.stringify(prov,null,2); const live=await api('action=live_readiness'); setTruthFromMonitor(live);document.getElementById('startup_step').textContent=(live.live_verified?'LIVE VERIFIED ✅':'NOT LIVE ❌. Next: '+(live.next_action||'Run API Doctor')); document.getElementById('readiness').textContent=JSON.stringify(live.readiness||{},null,2); if(live.price){PRICES.push(Number(live.price)); if(PRICES.length>64){PRICES.shift();} drawSpark();} const setup=await api('action=alpaca_setup'); document.getElementById('alpaca_setup').textContent=JSON.stringify(setup.alpaca||{},null,2);}seedSparkFromDemo();refresh(); setInterval(refresh,1500);
+async function refresh(){const p=await api('action=paper_account');const a=p.account||{};setTruth(p); if(p.price){PRICES.push(Number(p.price)); if(PRICES.length>64){PRICES.shift();} drawSpark();}document.getElementById('equity').textContent=`$${fmt(a.equity)}`;document.getElementById('initial').textContent=`$${fmt(a.initial_equity)}`;document.getElementById('session_pnl').textContent=fmt((a.equity||0)-(a.initial_equity||0));document.getElementById('ret').textContent=`${fmt(a.return_pct)}%`;document.getElementById('ru').textContent=`${fmt(a.realized_pnl)} / ${fmt(a.unrealized_pnl)}`;document.getElementById('trades').textContent=a.trade_count??0;document.getElementById('win').textContent=(a.win_rate_label||`${fmt(a.win_rate_pct)}%`);document.getElementById('awl').textContent=`${fmt(a.avg_win)} / ${fmt(a.avg_loss)}`;document.getElementById('exp').textContent=`${fmt(a.expectancy)}${a.expectancy_confidence==='low sample'?' (low sample)':''}`;document.getElementById('pf').textContent=(a.profit_factor_label??fmt(a.profit_factor));document.getElementById('fill_model').textContent=(p.fill_model||'SIM_OHLC_LIMIT');document.getElementById('decision').textContent=JSON.stringify(p.last_decision||{});const prov=(p.provenance&&Object.keys(p.provenance).length)?p.provenance:{provider_primary:p.provider_primary,data_grade:p.data_grade,last_bar_ts:p.last_bar_ts,freshness_label:p.freshness_label,freshness_basis:p.freshness_basis,dataset_sha256:'unknown',bars_loaded:0,recon_status:p.recon_status};document.getElementById('prov').textContent=JSON.stringify(prov,null,2); const live=await api('action=live_readiness'); setTruthFromMonitor(live);document.getElementById('startup_step').textContent=(live.live_verified?'LIVE VERIFIED ✅':'NOT LIVE ❌. Next: '+(live.next_action||'Run API Doctor')); document.getElementById('readiness').textContent=JSON.stringify(live.readiness||{},null,2); document.getElementById('paper_days_progress').textContent=`${live.paper_days_completed??0} / ${live.paper_days_required??45}`; if(live.price){PRICES.push(Number(live.price)); if(PRICES.length>64){PRICES.shift();} drawSpark();} const setup=await api('action=alpaca_setup'); document.getElementById('alpaca_setup').textContent=JSON.stringify(setup.alpaca||{},null,2);}seedSparkFromDemo();refresh(); setInterval(refresh,1500);
 </script></body></html>
 """
+
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj: dict, status: int = 200) -> None:
@@ -94,11 +97,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = HTML.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload); return
         if self.path.startswith("/artifacts/"):
-            p = self.path.lstrip("/")
-            try:
-                data = open(p, "rb").read(); self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
-            except FileNotFoundError:
-                pass
+            target = artifact_target(self.path)
+            if target is not None:
+                data = target.read_bytes()
+                self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
         self.send_response(404); self.end_headers()
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/api/run": self._send_json({"error": "not_found"}, 404); return

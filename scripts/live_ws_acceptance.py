@@ -16,19 +16,23 @@ from omega_quant.monitor.live_ws import ensure_websocket, get_ws_state
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--seconds", type=int, default=30)
+    p.add_argument("--freshness-threshold", type=int, default=300)
+    p.add_argument("--require-live", action="store_true")
     args = p.parse_args()
 
     out = Path("artifacts/live_ws_acceptance.json")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    keys_present = bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"))
+    keys_present = bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET") and os.getenv("ALPACA_BASE_URL"))
     ws_lib = importlib.util.find_spec("websockets") is not None
+    live_expected = bool(args.require_live or os.getenv("EXPECT_LIVE_ACCEPTANCE", "false").lower() == "true")
+
     if not keys_present or not ws_lib:
         result = {
             "status": "SKIP",
             "reason": "requires_keys_or_websockets",
-            "next_action": "Set .env Alpaca keys and install websockets, then rerun.",
-            "metrics": {"keys_present": keys_present, "websockets_installed": ws_lib},
+            "next_action": "Set .env Alpaca keys/base URL and install websockets, then rerun.",
+            "metrics": {"keys_present": keys_present, "websockets_installed": ws_lib, "live_expected": live_expected},
         }
         out.write_text(json.dumps(result, indent=2), encoding="utf-8")
         return 0
@@ -49,11 +53,25 @@ def main() -> int:
             break
         time.sleep(1)
 
-    ok = saw_q and saw_b
+    fresh = last.get("freshness_seconds")
+    ok = saw_q and saw_b and isinstance(fresh, int) and fresh <= args.freshness_threshold
+    if ok:
+        status = "PASS"
+        rc = 0
+        reason = ""
+    elif live_expected:
+        status = "FAIL"
+        rc = 1
+        reason = "ws_missing_quote_or_bar_events"
+    else:
+        status = "SKIP"
+        rc = 0
+        reason = "live_not_required"
+
     result = {
-        "status": "PASS" if ok else "FAIL",
-        "reason": "" if ok else "ws_missing_quote_or_bar_events",
-        "next_action": "Check Alpaca data entitlements/subscription and websocket auth" if not ok else "None",
+        "status": status,
+        "reason": reason,
+        "next_action": "Check Alpaca data entitlements/subscription and websocket auth" if status == "FAIL" else "None",
         "metrics": {
             "event_count": event_count,
             "saw_quote": saw_q,
@@ -63,10 +81,13 @@ def main() -> int:
             "last_trade_ts": last.get("last_trade_ts"),
             "last_bar_ts": last.get("last_bar_ts"),
             "connected": last.get("connected"),
+            "freshness_seconds": fresh,
+            "freshness_threshold": args.freshness_threshold,
+            "live_expected": live_expected,
         },
     }
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    return 0 if ok else 1
+    return rc
 
 
 if __name__ == "__main__":

@@ -83,3 +83,11 @@ class AlpacaPaperBroker:
             return self._request("GET", "/v2/orders:by_client_order_id", query={"client_order_id": client_order_id})  # type: ignore[return-value]
         except Exception:  # noqa: BLE001
             return None
+
+
+    def cancel_order(self, order_id: str) -> dict | None:
+        try:
+            out = self._request("DELETE", f"/v2/orders/{order_id}")
+            return out if isinstance(out, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
