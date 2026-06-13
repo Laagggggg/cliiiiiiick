@@ -9,14 +9,15 @@ export const PAL = {
   wall: 0x1d1a26,
 };
 
-// 3-step gradient map shared by all toon materials → anime cel shading
+// Soft anime cel ramp: a dim shadow band, a mid band, then full light. The
+// gentle steps read as toon shading without going flat/posterized.
 let gradientMap = null;
 function getGradientMap() {
   if (!gradientMap) {
-    const data = new Uint8Array([90, 150, 255, 255]);
-    gradientMap = new THREE.DataTexture(data, 4, 1, THREE.RedFormat);
-    gradientMap.minFilter = THREE.NearestFilter;
-    gradientMap.magFilter = THREE.NearestFilter;
+    const data = new Uint8Array([88, 96, 150, 168, 232, 255, 255, 255]);
+    gradientMap = new THREE.DataTexture(data, data.length, 1, THREE.RedFormat);
+    gradientMap.minFilter = THREE.LinearFilter;
+    gradientMap.magFilter = THREE.LinearFilter;
     gradientMap.needsUpdate = true;
   }
   return gradientMap;
@@ -72,6 +73,33 @@ export function sheer(color, opacity = 0.42) {
   return m;
 }
 
+// Cel-shaded skin with a Fresnel rim light injected into the toon shader.
+// The bright edge glow is the single biggest "anime/VRChat" cue — it makes a
+// continuous body read as a stylized character instead of flat geometry.
+// Baked as shader constants (no uniforms) so it is rock-solid across builds.
+export function rimSkin(colorHex, rim = { color: 0x6fa6c8, power: 3.1, strength: 0.30 }) {
+  const key = `rim_${colorHex}_${rim.color}_${rim.power}_${rim.strength}`;
+  if (cache.has(key)) return cache.get(key);
+
+  const c = new THREE.Color(rim.color);
+  const m = new THREE.MeshToonMaterial({ color: colorHex, gradientMap: getGradientMap() });
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace(
+      '#include <dithering_fragment>',
+      `{
+        vec3 _vd = normalize( vViewPosition );
+        float _rd = 1.0 - clamp( dot( _vd, normal ), 0.0, 1.0 );
+        float _rim = pow( _rd, ${rim.power.toFixed(2)} ) * ${rim.strength.toFixed(2)};
+        gl_FragColor.rgb += vec3( ${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)} ) * _rim;
+      }
+      #include <dithering_fragment>`
+    );
+  };
+  m.customProgramCacheKey = () => key;
+  cache.set(key, m);
+  return m;
+}
+
 // ---- primitive helpers (every part casts a shadow) -----------------------
 function add(parent, geo, mat, pos, scale, rot) {
   const mesh = new THREE.Mesh(geo, mat);
@@ -104,6 +132,21 @@ export const torus = (p, m, pos, radius, tube, r) =>
 export function cap(p, m, pos, rad, halfLen, r) {
   const geo = new THREE.CapsuleGeometry(rad, halfLen * 2, 6, 16);
   return add(p, geo, m, pos, [1, 1, 1], r);
+}
+
+// Smooth revolved surface from a [radius, y] profile (bottom→top). Used to
+// build continuous, curvy body sections — no seams or gaps. depthScale flattens
+// the cross-section front-to-back so torsos read as bodies, not barrels.
+export function lathe(parent, mat, profile, { depthScale = 0.72, segments = 28, pos, rot } = {}) {
+  const pts = profile.map(([r, y]) => new THREE.Vector2(Math.max(r, 0.001), y));
+  const geo = new THREE.LatheGeometry(pts, segments);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.scale.z = depthScale;
+  if (pos) mesh.position.set(pos[0], pos[1], pos[2]);
+  if (rot) mesh.rotation.set(rot[0], rot[1], rot[2]);
+  mesh.castShadow = true;
+  parent.add(mesh);
+  return mesh;
 }
 
 export function group(parent, pos) {

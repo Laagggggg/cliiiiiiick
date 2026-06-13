@@ -32,7 +32,7 @@ renderer.setPixelRatio(POTATO ? 1 : Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = !POTATO;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.12;
+renderer.toneMappingExposure = 1.0;
 document.getElementById('app').append(renderer.domElement);
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 120);
@@ -44,7 +44,7 @@ const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 const composer = new EffectComposer(renderer);
 const renderPass = new RenderPass(scene, camera);
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.4, 1.15);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.45, 1.35);
 composer.addPass(renderPass);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
@@ -163,8 +163,8 @@ function enterCreator() {
   };
   spot(2.4, 2.2, PAL.neonPink); spot(-2.4, 2.2, PAL.neonCyan); spot(0, 2.8, 0xffffff, 7);
 
-  camera.position.set(0, 1.45, 3.1);
-  camera.lookAt(0, 1.0, 0);
+  camera.position.set(0, 1.32, 2.5);
+  camera.lookAt(0, 1.02, 0);
 
   let rig = null;
   let spin = Math.PI * 0.04;
@@ -213,6 +213,11 @@ function enterStore() {
   const rig = buildAvatar({ preset: state.preset, body: state.getBody(), faceKey: state.faceKey, skin: state.skin });
   rig.root.position.set(0, 0, -7);
   if (!state.outfit.hair) state.outfit.hair = state.hairId;
+  // ?fit dev flag: spawn already wearing a curated drip set (for previewing clothes)
+  if (PARAMS.has('fit') && Object.keys(state.outfit).length <= 1) {
+    for (const id of ['out_cropped', 'top_mesh', 'bot_leather', 'sho_platform', 'jwl_choker', 'acc_shades'])
+      state.outfit[findItem(id).slot] = id;
+  }
   for (const id of Object.values(state.outfit)) rig.equip(findItem(id));
   sc.add(rig.root);
 

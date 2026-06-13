@@ -16,19 +16,33 @@ export function equipItem(rig, item) {
   const { torsoLen, shw, headR } = rig.dims;
   const T = rig.torso, P = rig.pelvis, H = rig.headGroup;
 
-  const sleeves = (rad, len, mat) => {
-    for (const j of [rig.joints.shoulderL, rig.joints.shoulderR])
-      track(cap(j, mat, [0, -len * 0.5, 0], rad, len * 0.32));
-  };
-  const pantsLeg = (mul, calfMul, mat, full = true) => {
-    for (const j of [rig.joints.hipL, rig.joints.hipR]) {
-      track(cap(j, mat, [0, -0.215, 0], 0.061 * mul, 0.15));
-      if (full) track(cap(j, mat, [0, -0.6, 0], 0.046 * calfMul, 0.13));
+  // body-aware fit metrics — mirror the builder so clothes wrap the curvy body
+  const cfg = rig.cfg || {};
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const invlerp = (a, b, v) => Math.min(1, Math.max(0, (v - a) / (b - a)));
+  const muscleW = lerp(0.92, 1.18, invlerp(0.6, 1.6, cfg.muscle ?? 1));
+  const hipsK = cfg.hips ?? 1;
+  const thighsK = (cfg.thighs ?? 1) * lerp(1, hipsK, 0.3);
+  const bodyThighR = 0.093 * thighsK;     // body thigh radius (builder)
+  const bodyCalfR = 0.07 * (cfg.calves ?? 1);
+  const bodyArmR = 0.05 * (cfg.arms ?? 1) * muscleW;
+
+  const sleeves = (extra, len, mat) => {
+    const r = bodyArmR + 0.018 + extra;
+    for (const j of [rig.joints.shoulderL, rig.joints.shoulderR]) {
+      track(cap(j, mat, [0, 0.01, 0], r * 1.25, 0.05));     // cover shoulder ball
+      track(cap(j, mat, [0, -len * 0.5, 0], r, len * 0.32));
     }
   };
-  const hipsK = rig.cfg?.hips ?? 1;
+  const pantsLeg = (widthMul, calfMul, mat, full = true) => {
+    for (const j of [rig.joints.hipL, rig.joints.hipR]) {
+      track(cap(j, mat, [0, -0.05, 0], bodyThighR * widthMul + 0.014, 0.06)); // upper-thigh/hip cover
+      track(cap(j, mat, [0, -0.21, 0], bodyThighR * widthMul + 0.012, 0.13)); // thigh
+      if (full) track(cap(j, mat, [0, -0.57, 0], bodyCalfR * calfMul + 0.012, 0.13)); // calf
+    }
+  };
   const hipWrap = (mat, s = 1) =>
-    track(sph(P, mat, [0, 0, 0], [0.38 * s * hipsK, 0.25, 0.3 * s * hipsK]));
+    track(sph(P, mat, [0, -0.02, 0], [(0.36 * hipsK + 0.03) * s, 0.27, (0.30 * hipsK + 0.03) * s]));
   const eachFoot = (fn) => {
     for (const j of [rig.joints.hipL, rig.joints.hipR]) {
       const footY = -(rig.dims.hipY - 0.045);
@@ -42,24 +56,24 @@ export function equipItem(rig, item) {
       track(box(T, prim, [0, torsoLen * 0.42, 0], [shw * 2.45, torsoLen * 0.85, 0.36]));
       track(box(T, sec, [0, torsoLen * 0.18, 0.185], [shw * 1.1, 0.12, 0.03]));
       track(sph(T, prim, [0, torsoLen * 0.88, -0.13], [0.24, 0.2, 0.22]));
-      sleeves(0.058, 0.55, prim);
+      sleeves(0.022, 0.55, prim);
       break;
     case 'mesh':
       track(cap(T, sheer(item.c1, 0.4), [0, torsoLen * 0.45, 0], shw * 0.78, 0.14));
       track(cyl(T, sec, [0, torsoLen * 0.88, 0], [0.055, 0.03, 0.055]));
       break;
     case 'blouse':
-      track(box(T, prim, [0, torsoLen * 0.42, 0], [shw * 2.05, torsoLen * 0.8, 0.31]));
+      track(box(T, prim, [0, torsoLen * 0.42, 0], [shw * 2.05, torsoLen * 0.8, 0.35]));
       track(box(T, sec, [0, torsoLen * 0.84, 0.06], [shw * 1.1, 0.05, 0.14]));
-      sleeves(0.05, 0.52, sheer(item.c1, 0.6));
+      sleeves(0.006, 0.52, sheer(item.c1, 0.6));
       break;
     case 'tank':
-      track(box(T, prim, [0, torsoLen * 0.42, 0], [shw * 1.75, torsoLen * 0.78, 0.285]));
+      track(box(T, prim, [0, torsoLen * 0.42, 0], [shw * 1.75, torsoLen * 0.78, 0.34]));
       break;
     case 'tee':
       track(box(T, prim, [0, torsoLen * 0.38, 0], [shw * 2.5, torsoLen * 0.88, 0.36]));
       track(box(T, sec, [0, torsoLen * 0.45, 0.185], [0.16, 0.16, 0.02]));
-      sleeves(0.062, 0.22, prim);
+      sleeves(0.022, 0.22, prim);
       break;
     case 'vest':
       track(box(T, prim, [0, torsoLen * 0.5, 0], [shw * 2.2, torsoLen * 0.62, 0.4]));
@@ -73,7 +87,7 @@ export function equipItem(rig, item) {
       for (const d of [-1, 1])
         track(box(T, prim, [d * shw * 0.62, torsoLen * 0.58, 0], [shw * 1.25, torsoLen * 0.52, 0.4]));
       track(box(T, chromeSec, [0, torsoLen * 0.84, -0.02], [shw * 1.5, 0.05, 0.22]));
-      sleeves(0.057, 0.56, prim);
+      sleeves(0.014, 0.56, prim);
       break;
     case 'trench':
       for (const d of [-1, 1])
@@ -82,7 +96,7 @@ export function equipItem(rig, item) {
       track(box(T, sec, [0, torsoLen * 0.18, 0], [shw * 2.65, 0.05, 0.42]));
       track(box(T, sec, [-shw * 0.45, torsoLen * 0.7, 0.185], [0.05, 0.22, 0.025], [0, 0, 0.31]));
       track(box(T, sec, [shw * 0.45, torsoLen * 0.7, 0.185], [0.05, 0.22, 0.025], [0, 0, -0.31]));
-      sleeves(0.06, 0.58, prim);
+      sleeves(0.018, 0.58, prim);
       break;
     case 'fur':
       for (const d of [-1, 1])
@@ -90,35 +104,35 @@ export function equipItem(rig, item) {
       track(box(T, prim, [0, torsoLen * 0.25 - 0.12, -0.16], [shw * 2.6, 0.95, 0.12]));
       for (let i = 0; i < 7; i++)
         track(sph(T, sec, [-shw * 1.2 + (i / 6) * shw * 2.4, torsoLen * 0.82, 0.04], [0.11, 0.11, 0.11]));
-      sleeves(0.08, 0.56, prim);
+      sleeves(0.042, 0.56, prim);
       break;
     case 'puffer':
       for (let i = 0; i < 4; i++)
         track(cap(T, prim, [0, torsoLen * (0.16 + i * 0.18), 0], 0.105, shw * 0.95, [0, 0, Math.PI / 2]));
       track(box(T, sec, [0, torsoLen * 0.45, 0.2], [0.02, torsoLen * 0.6, 0.015]));
-      sleeves(0.078, 0.55, prim);
+      sleeves(0.04, 0.55, prim);
       break;
     case 'cyber':
       track(box(T, prim, [0, torsoLen * 0.52, 0], [shw * 2.35, torsoLen * 0.62, 0.4]));
       track(box(T, neon(item.c2), [0, torsoLen * 0.3, 0], [shw * 2.4, 0.02, 0.41]));
       track(sph(T, chromeSec, [-shw, torsoLen * 0.78, 0], [0.15, 0.15, 0.15]));
       track(sph(T, chromeSec, [shw, torsoLen * 0.78, 0], [0.15, 0.15, 0.15]));
-      sleeves(0.06, 0.55, prim);
+      sleeves(0.018, 0.55, prim);
       break;
 
     // ============================ bottoms =============================
     case 'leather': {
       const shiny = glossy(item.c1, 0.18);
-      pantsLeg(1.18, 1.25, shiny); hipWrap(shiny);
+      pantsLeg(1.12, 1.12, shiny); hipWrap(shiny);
       break;
     }
     case 'cargo':
-      pantsLeg(1.45, 1.55, prim); hipWrap(prim, 1.05);
+      pantsLeg(1.5, 1.6, prim); hipWrap(prim, 1.05);
       track(box(rig.joints.hipL, sec, [-0.115, -0.28, 0], [0.05, 0.12, 0.1]));
       track(box(rig.joints.hipR, sec, [0.115, -0.28, 0], [0.05, 0.12, 0.1]));
       break;
     case 'baggy':
-      pantsLeg(1.7, 2.1, prim); hipWrap(prim, 1.08);
+      pantsLeg(1.9, 2.5, prim); hipWrap(prim, 1.1);
       break;
     case 'miniskirt':
       track(cyl(P, prim, [0, -0.06, 0], [0.21 * hipsK, 0.1, 0.18 * hipsK]));
